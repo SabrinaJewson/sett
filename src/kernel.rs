@@ -1,54 +1,68 @@
-pub(crate) fn check<'s>(st: &mut State<'s>, expr: &Expr<'s>) -> Result<Expr<'s>, String> {
-    let mut bvars = Vec::new();
-    let bvars = Stack::new(&mut bvars);
-    let depth = 0;
-    let mut cx = Context { st, bvars, depth };
-    type_of(&mut cx, expr)
+pub(crate) struct State {
+    defs: Vec<(Expr, Option<Expr>)>,
 }
 
-struct Context<'a, 's> {
-    st: &'a mut State<'s>,
-    bvars: Stack<'a, &'a Expr<'s>>,
-    depth: u32,
-}
+pub(crate) const LEVEL: Expr = Expr::FVar(0);
+pub(crate) const LEVEL_Z: Expr = Expr::FVar(1);
+pub(crate) const LEVEL_S: Expr = Expr::FVar(2);
+pub(crate) const LEVEL_MAX: Expr = Expr::FVar(3);
+pub(crate) const LEVEL_IMAX: Expr = Expr::FVar(4);
+pub(crate) const SORT: Expr = Expr::FVar(5);
 
-impl<'s> Context<'_, 's> {
-    fn reborrow(&mut self) -> Context<'_, 's> {
-        let st = &mut *self.st;
-        let bvars = self.bvars.reborrow();
-        let depth = self.depth;
-        Context { st, bvars, depth }
+impl State {
+    pub fn new() -> Self {
+        let defs = Vec::new();
+        let mut this = State { defs };
+        this.add(SORT.app([LEVEL_S.app([LEVEL_Z])]), None);
+        this.add(LEVEL, None);
+        this.add(LEVEL.bind(Pi, LEVEL), None);
+        this.add(LEVEL.bind(Pi, LEVEL).bind(Pi, LEVEL), None);
+        this.add(LEVEL.bind(Pi, LEVEL).bind(Pi, LEVEL), None);
+        let sort = SORT.app([LEVEL_S.app([Expr::BVar(0)])]).bind(Pi, LEVEL);
+        this.add(sort, None);
+        this
+    }
+    pub fn add(&mut self, r#type: Expr, value: Option<Expr>) -> u32 {
+        self.defs.push((r#type, value));
+        (self.defs.len() - 1).try_into().unwrap()
+    }
+    pub fn type_check(&mut self, value: &Expr) -> Result<Expr, String> {
+        let st = self;
+        let mut bvars = Vec::new();
+        let bvars = Stack::new(&mut bvars);
+        let depth = 0;
+        let mut cx = Context { st, bvars, depth };
+        type_of(&mut cx, value)
+    }
+    pub fn get(&self, fvar: u32) -> (&Expr, Option<&Expr>) {
+        let (r#type, value) = &self.defs[fvar as usize];
+        (r#type, value.as_ref())
     }
 }
 
-fn type_of<'s>(cx: &mut Context<'_, 's>, expr: &Expr<'s>) -> Result<Expr<'s>, String> {
+struct Context<'a> {
+    st: &'a mut State,
+    bvars: Stack<'a, &'a Expr>,
+    depth: u32,
+}
+
+fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
     log::trace!("{:4} type_of({expr:?})", cx.depth);
     cx.depth += 1;
     let res = match expr {
-        Expr::FVar(ident) => {
-            let def = cx.st.defs.get(ident);
-            let def = def.ok_or_else(|| format!("unknown fvar `{ident}`"))?;
-            def.0.clone()
-        }
+        &Expr::FVar(fvar) => cx.st.get(fvar).0.clone(),
         &Expr::BVar(n) => {
             let mut ty = cx.bvars[cx.bvars.len() - 1 - usize::from(n)].clone();
             (ty.raise(0, n + 1), ty).1
         }
         Expr::Sortω(l) => Expr::Sortω(l.checked_add(1).ok_or("levelω overflow")?),
-        Expr::Bind(Lam, l, r) => bind(cx, l, |cx, _| {
-            Ok(Expr::Bind(Pi, l.clone(), Box::new(type_of(cx, r)?)))
-        })?,
+        Expr::Bind(Lam, l, r) => bind(cx, l, |cx, _| Ok(type_of(cx, r)?.bind(Pi, l.clone())))?,
         Expr::Bind(Pi, l, r) => bind(cx, l, |cx, l_sort| {
             Ok(match (l_sort, type_of(cx, r)?.expect_sort()?) {
-                (Sort::Sort(l), Sort::Sort(r)) => {
-                    // TODO: `r` thrown away…
-                    if let Some(r) = r.lower(0, 1) {
-                        let level = Expr::fvar_app("Level:imax", [l, Box::new(r)]);
-                        Sort::Sort(Box::new(level)).into_expr()
-                    } else {
-                        Expr::Sortω(0)
-                    }
-                }
+                (Sort::Sort(l), Sort::Sort(mut r)) => match r.lower(0, 1) {
+                    Ok(()) => SORT.app([LEVEL_IMAX.app([l, r])]),
+                    Err(()) => Expr::Sortω(0),
+                },
                 (Sort::Sortω(a), Sort::Sort(_)) => Expr::Sortω(a),
                 (Sort::Sort(_), Sort::Sortω(a)) => Expr::Sortω(a),
                 (Sort::Sortω(a), Sort::Sortω(b)) => Expr::Sortω(Ord::max(a, b)),
@@ -58,7 +72,7 @@ fn type_of<'s>(cx: &mut Context<'_, 's>, expr: &Expr<'s>) -> Result<Expr<'s>, St
             Expr::Bind(Pi, mut f_in, mut f_out) => {
                 let mut r_type = type_of(cx, r)?;
                 ensure_def_eq(cx, &mut f_in, &mut r_type)?;
-                (f_out.subst(0, r), *f_out).1
+                (f_out.subst(r), *f_out).1
             }
             t => return Err(format!("application LHS `{l:?} : {t:?}` not Π type")),
         },
@@ -67,44 +81,43 @@ fn type_of<'s>(cx: &mut Context<'_, 's>, expr: &Expr<'s>) -> Result<Expr<'s>, St
             ind_check(cx, i)?;
             let c = i.constrs.get(usize::from(n)).cloned();
             let mut c = c.ok_or_else(|| format!("only {} constructors", i.constrs.len()))?;
-            (c.subst_with(0, &mut |e| *e = Expr::Ind(i.clone())), c).1
+            (c.subst_with(|e| *e = Expr::Ind(i.clone())), c).1
         }
         Expr::IndElim(i) => {
-            let large_elim = ind_check(cx, i)?;
+            ind_check(cx, i)?;
+            let universe_params = if i.sm { 0 } else { 1 };
             let constrs = i.constrs.len() as u16;
-            let mut t = i.arity.clone();
-            t.raise(0, 1 + constrs);
+            let mut t = (*i.arity).clone();
+            t.raise(0, universe_params + 1 + constrs);
             telescope_map(&mut t, 0, |e, d| {
-                let major_premise = Expr::Ind(i.clone()).app_n((0..d).rev().map(Expr::BVar));
-                let out = Expr::BVar(1 + d + constrs).app_n((0..=d).rev().map(Expr::BVar));
-                *e = Expr::Bind(Pi, Box::new(major_premise), Box::new(out));
+                let mut i = Expr::Ind(i.clone());
+                i.raise(0, universe_params + 1 + constrs + d);
+                let major_premise = i.app((0..d).rev().map(Expr::BVar));
+                let out = Expr::BVar(1 + d + constrs).app((0..=d).rev().map(Expr::BVar));
+                *e = out.bind(Pi, major_premise);
             });
-            for (k, c) in i.constrs.iter().enumerate() {
+            for (k, c) in i.constrs.iter().enumerate().rev() {
                 let mut minor_premise = c.clone();
+                minor_premise.subst_with(|e| *e = Expr::Ind(i.clone()));
+                minor_premise.raise(0, universe_params + 1 + k as u16);
                 telescope_map(&mut minor_premise, 0, |recs, max_d| {
                     let constr = Expr::IndConstr(k as u16, i.clone());
-                    *recs = minor_premise_recs(k as u16, c, constr, max_d, 0, 0)
+                    *recs = minor_premise_recs(c, constr, [universe_params, k as u16, max_d, 0, 0])
                 });
-                t = Box::new(Expr::Bind(Pi, Box::new(minor_premise), t));
+                t = t.bind(Pi, minor_premise);
             }
             let mut motive_type = i.arity.clone();
+            motive_type.raise(0, universe_params);
             telescope_map(&mut motive_type, 0, |e, d| {
-                let v = Expr::Ind(i.clone()).app_n((0..d).rev().map(Expr::BVar));
-                let rhs = Sort::Sort(Box::new(match large_elim {
-                    true => Expr::FVar("Level:0"),
-                    false => Expr::BVar(1 + d),
-                }));
-                *e = Expr::Bind(Pi, Box::new(v), Box::new(rhs.into_expr()));
+                let mut ind = Expr::Ind(i.clone());
+                ind.raise(0, universe_params + d);
+                let v = ind.app((0..d).rev().map(Expr::BVar));
+                let rhs = if i.sm { LEVEL_Z } else { Expr::BVar(1 + d) };
+                *e = SORT.app([rhs]).bind(Pi, v);
             });
-            let mut t = Expr::Bind(Pi, motive_type, t);
-            if large_elim {
-                t = Expr::Bind(Pi, Box::new(Expr::FVar("Level")), Box::new(t));
-            }
+            t = t.bind(Pi, motive_type);
+            t = if i.sm { t } else { t.bind(Pi, LEVEL) };
             t
-        }
-        &Expr::IndIota(_n, ref i) => {
-            let _large_elim = ind_check(cx, i)?;
-            todo!()
         }
     };
     cx.depth -= 1;
@@ -112,81 +125,107 @@ fn type_of<'s>(cx: &mut Context<'_, 's>, expr: &Expr<'s>) -> Result<Expr<'s>, St
     Ok(res)
 }
 
-fn ind_check<'s>(cx: &mut Context<'_, 's>, ind: &Ind<'s>) -> Result<bool, String> {
+fn ind_check(cx: &mut Context<'_>, ind: &Ind) -> Result<(), String> {
     let mut base_sort = arity(cx, &ind.arity, 0)?;
     let level_kind = level::kind(cx, &mut base_sort).ok_or("invalid sort for inductive type")?;
-    let mut large_elim = true;
+    if ind.sm && !matches!(level_kind, level::Kind::AlwaysZero) {
+        return Err("small elimination allowed for inductive propositions only".to_owned());
+    }
 
-    let mut base_sort = Sort::Sort(Box::new(base_sort)).into_expr();
+    let mut base_sort = SORT.app([base_sort]);
     base_sort.raise(0, 1);
-    let num_constrs = u16::try_from(ind.constrs.len()).map_err(|_| "too many constructors")?;
+    u16::try_from(ind.constrs.len()).map_err(|_| "too many constructors")?;
     bind(cx, &ind.arity, |cx, _| {
         for c in &ind.constrs {
             let mut sort = type_of(cx, c)?;
             ensure_def_eq(cx, &mut base_sort, &mut sort)?;
 
-            let mut arg_level = constr(cx, c, 0)?;
+            let (resultant_type, max_d) = constr(c, 0)?;
             match level_kind {
-                level::Kind::AlwaysZero => {
-                    large_elim =
-                        num_constrs == 1 && def_eq(cx, &mut arg_level, &mut Expr::FVar("Level:0"))
-                }
-                level::Kind::SometimesZero if 1 < ind.constrs.len() => {
-                    return Err(">1 constructor for potentially-zero sort".to_owned())
-                }
-                level::Kind::SometimesZero => {
-                    let level = sort.into_finite_sort().unwrap();
-                    let mut level = Expr::fvar_app("Level:max", [arg_level, level]);
+                level::Kind::AlwaysZero if ind.sm => {}
+                level::Kind::AlwaysNonzero => {}
+                _ if 1 < ind.constrs.len() => return Err(">1 constructor".to_owned()),
+                _ => {
+                    let mut level = sort.into_finite_sort().unwrap();
+                    singleton(cx, resultant_type, c, 0, max_d, &mut level);
                     let base_level = base_sort.as_finite_sort_mut().unwrap();
                     ensure_def_eq(cx, base_level, &mut level)?;
                 }
-                level::Kind::AlwaysNonzero => {}
             }
         }
         Ok(())
     })?;
 
-    Ok(large_elim)
+    Ok(())
 }
 
-fn minor_premise_recs<'s>(
-    i: u16,
-    c: &Expr<'s>,
-    mut constr: Expr<'s>,
-    max_d: u16,
-    d: u16,
-    rec: u16,
-) -> Expr<'s> {
+fn minor_premise_recs(c: &Expr, mut constr: Expr, [u, i, max_d, d, rec]: [u16; 5]) -> Expr {
     match c {
         Expr::BVar(_) | Expr::App(_, _) => {
-            assert_eq!(d, max_d);
             let mut c = c.clone();
+            c.raise(d + 1, u);
             c.raise(d, i);
             c.raise(0, rec);
-            constr.raise(0, 1 + i + d + rec);
-            c.app_n([constr.app_n((rec..rec + d).rev().map(Expr::BVar))])
+            constr.raise(0, u + 1 + i + d + rec);
+            c.app([constr.app((rec..rec + d).rev().map(Expr::BVar))])
         }
         Expr::Bind(Pi, l, c) if l.has_bvar(d) => {
             let mut l = l.clone();
+            l.raise(d + 1, u);
             l.raise(d, i);
             l.raise(0, rec + max_d - d);
             telescope_map(&mut l, 0, |e, args| {
                 let a = Expr::BVar(args + rec + max_d - 1 - d);
-                let a = a.app_n((0..args).rev().map(Expr::BVar));
-                *e = take(e).app_n([a]);
+                let a = a.app((0..args).rev().map(Expr::BVar));
+                *e = take(e).app([a]);
             });
-            let r = minor_premise_recs(i, c, constr, max_d, d + 1, rec + 1);
-            Expr::Bind(Pi, l, Box::new(r))
+            minor_premise_recs(c, constr, [u, i, max_d, d + 1, rec + 1]).bind(Pi, l)
         }
-        Expr::Bind(Pi, _, c) => minor_premise_recs(i, c, constr, max_d, d + 1, rec),
+        Expr::Bind(Pi, _, c) => minor_premise_recs(c, constr, [u, i, max_d, d + 1, rec]),
         _ => unreachable!("not a constructor type: {c:?}"),
     }
 }
 
-fn arity<'s>(cx: &mut Context<'_, 's>, a: &Expr<'s>, d: u16) -> Result<Expr<'s>, String> {
-    if let Some(e) = a.as_finite_sort() {
+fn minor_premise_rec_args(base: &Expr, c: &Expr, max_d: u16, d: u16, rec: u16, res: &mut Expr) {
+    match c {
+        Expr::BVar(_) | Expr::App(_, _) => {}
+        Expr::Bind(Pi, l, c) if l.has_bvar(d) => {
+            let mut l = l.clone();
+            let mut acc = &mut *res;
+            let mut relevant_arg = None;
+            for i in 0..rec + max_d {
+                let it;
+                (acc, it) = acc.unwrap_app();
+                match (rec + max_d - 1 - d).cmp(&i) {
+                    cmp::Ordering::Less => {
+                        l.subst_with(|e| {
+                            e.clone_from(it);
+                            e.raise(0, rec + max_d - 1 - i);
+                        });
+                    }
+                    cmp::Ordering::Equal => relevant_arg = Some(it),
+                    cmp::Ordering::Greater => {}
+                }
+            }
+            l.subst(base);
+            telescope_map(&mut l, 0, |e, args| {
+                let mut arg = relevant_arg.unwrap().clone();
+                arg.raise(0, args);
+                let arg = arg.app((0..args).rev().map(Expr::BVar));
+                *e = take(e).app([arg]);
+            });
+            *res = take(res).app([l]);
+            minor_premise_rec_args(base, c, max_d, d + 1, rec + 1, res);
+        }
+        Expr::Bind(Pi, _, c) => minor_premise_rec_args(base, c, max_d, d + 1, rec, res),
+        _ => unreachable!(),
+    }
+}
+
+fn arity(cx: &mut Context<'_>, a: &Expr, d: u16) -> Result<Expr, String> {
+    if let Some(mut e) = a.as_finite_sort().cloned() {
         let msg = "universe level cannot depend on indices";
-        Ok(e.lower(0, d).ok_or(msg)?)
+        (e.lower(0, d).map_err(|()| msg)?, Ok(e)).1
     } else if let Expr::Bind(Pi, l, r) = a {
         bind(cx, l, |cx, _| arity(cx, r, d + 1))
     } else {
@@ -194,9 +233,9 @@ fn arity<'s>(cx: &mut Context<'_, 's>, a: &Expr<'s>, d: u16) -> Result<Expr<'s>,
     }
 }
 
-fn bind<'s, R, F>(cx: &mut Context<'_, 's>, expr: &Expr<'s>, f: F) -> Result<R, String>
+fn bind<R, F>(cx: &mut Context<'_>, expr: &Expr, f: F) -> Result<R, String>
 where
-    F: FnOnce(&mut Context<'_, 's>, Sort<'s>) -> Result<R, String>,
+    F: FnOnce(&mut Context<'_>, Sort) -> Result<R, String>,
 {
     let sort = type_of(cx, expr)?.expect_sort()?;
     let (st, depth) = (&mut *cx.st, cx.depth);
@@ -206,18 +245,16 @@ where
     })
 }
 
-fn ensure_def_eq<'s>(
-    cx: &mut Context<'_, 's>,
-    lhs: &mut Expr<'s>,
-    rhs: &mut Expr<'s>,
-) -> Result<(), String> {
+fn ensure_def_eq(cx: &mut Context<'_>, lhs: &mut Expr, rhs: &mut Expr) -> Result<(), String> {
     if !def_eq(cx, lhs, rhs) {
-        return Err(format!("type mismatch: expected {lhs:?}, got {rhs:?}"));
+        return Err(format!(
+            "type mismatch:\nexpected {lhs:?}\n   found {rhs:?}"
+        ));
     }
     Ok(())
 }
 
-fn def_eq<'s>(cx: &mut Context<'_, 's>, lhs: &mut Expr<'s>, rhs: &mut Expr<'s>) -> bool {
+fn def_eq(cx: &mut Context<'_>, lhs: &mut Expr, rhs: &mut Expr) -> bool {
     log::trace!("{:4} def_eq({lhs:?}, {rhs:?})", cx.depth);
     cx.depth += 1;
 
@@ -245,44 +282,36 @@ fn def_eq<'s>(cx: &mut Context<'_, 's>, lhs: &mut Expr<'s>, rhs: &mut Expr<'s>) 
     r
 }
 
-fn ind_def_eq<'s>(cx: &mut Context<'_, 's>, lhs: &mut Ind<'s>, rhs: &mut Ind<'s>) -> bool {
-    lhs.constrs.len() == rhs.constrs.len() && def_eq(cx, &mut lhs.arity, &mut rhs.arity) && {
-        let mut iter = lhs.constrs.iter_mut().zip(&mut rhs.constrs);
-        iter.all(|(l, r)| def_eq(cx, l, r))
-    }
+fn ind_def_eq(cx: &mut Context<'_>, lhs: &mut Ind, rhs: &mut Ind) -> bool {
+    lhs.constrs.len() == rhs.constrs.len()
+        && def_eq(cx, &mut lhs.arity, &mut rhs.arity)
+        && bind(cx, &lhs.arity, |cx, _| {
+            let mut iter = lhs.constrs.iter_mut().zip(&mut rhs.constrs);
+            Ok(iter.all(|(l, r)| def_eq(cx, l, r)))
+        })
+        .unwrap()
 }
 
 // TODO: This is inefficient…
-fn uip<'s>(cx: &mut Context<'_, 's>, lhs: &mut Expr<'s>, rhs: &mut Expr<'s>) -> bool {
-    let not_proof = |e: &Expr<'_>| {
-        e.is_fvar_app("Sort") || matches!(e, Expr::Sortω(_) | Expr::Bind(Pi, ..) | Expr::Ind(_))
-    };
-    let not_prop =
-        |e: &Expr<'_>| e.is_fvar("Level") || e.is_fvar_app("Sort") || matches!(e, Expr::Sortω(_));
-    if !not_proof(lhs) && !not_proof(rhs) {
-        let l = type_of(cx, lhs).unwrap();
-        let r = type_of(cx, rhs).unwrap();
-        #[allow(unused_must_use)]
-        if !not_prop(&l) && !not_prop(&r) {
-            let mut l = type_of(cx, &l).unwrap();
-            let mut r = type_of(cx, &r).unwrap();
-            let mut zero = Expr::fvar_app("Sort", [Expr::FVar("Level:0")]);
-            def_eq(cx, &mut l, &mut zero) && def_eq(cx, &mut r, &mut zero) && return true;
+fn uip(cx: &mut Context<'_>, lhs: &mut Expr, rhs: &mut Expr) -> bool {
+    let not_proof = |e: &Expr| matches!(*e, LEVEL_Z) || e.is_app(&LEVEL_S);
+    if not_proof(lhs) || not_proof(rhs) {
+        return false;
+    }
+    let mut lhs_type = type_of(cx, lhs).unwrap();
+    if let Sort::Sort(mut level) = type_of(cx, &lhs_type).unwrap().into_sort().unwrap() {
+        if def_eq(cx, &mut level, &mut LEVEL_Z) {
+            let mut rhs_type = type_of(cx, rhs).unwrap();
+            let _ = def_eq(cx, &mut lhs_type, &mut rhs_type) && return true;
         }
     }
     false
 }
 
 mod level {
-    #[allow(unused_must_use)]
-    pub(super) fn def_eq<'s>(
-        cx: &mut Context<'_, 's>,
-        lhs: &mut Expr<'s>,
-        rhs: &mut Expr<'s>,
-    ) -> Result<bool, ()> {
-        (!is(lhs) && !is(rhs)) && return Err(());
+    pub(super) fn def_eq(cx: &mut Context<'_>, lhs: &mut Expr, rhs: &mut Expr) -> Result<bool, ()> {
+        let _ = (!is(lhs) && !is(rhs)) && return Err(());
         let exprs = Vec::new();
-        let cx = &mut cx.reborrow();
         let mut vars = Vars { cx, exprs };
         let lhs_term = term(&mut vars, lhs)?;
         let rhs_term = term(&mut vars, rhs)?;
@@ -291,29 +320,32 @@ mod level {
         max(&mut r, &rhs_term)?;
 
         let vars = vars.exprs.len() as u8;
-        Ok((0..(1_u16 << vars))
-            .all(|s| apply(&l, vars, s).is_some_and(|l| Some(l) == apply(&r, vars, s))))
+        log::trace!("{lhs:?} → {l:?}");
+        log::trace!("{rhs:?} → {r:?}");
+        let eq = (0..(1_u16 << vars))
+            .all(|s| apply(&l, vars, s).is_some_and(|l| Some(l) == apply(&r, vars, s)));
+        log::trace!("result: {eq}");
+        Ok(eq)
     }
-    fn is(e: &Expr<'_>) -> bool {
-        e.is_fvar("Level:0")
-            || e.is_fvar_app("Level:s")
-            || matches!(e, Expr::App(f, _) if f.is_fvar_app("Level:max") || f.is_fvar_app("Level:imax"))
+    fn is(e: &Expr) -> bool {
+        *e == LEVEL_Z
+            || e.is_app(&LEVEL_S)
+            || matches!(e, Expr::App(e, _) if e.is_app(&LEVEL_MAX) || e.is_app(&LEVEL_IMAX))
     }
     pub(super) enum Kind {
         AlwaysZero,
         SometimesZero,
         AlwaysNonzero,
     }
-    pub(super) fn kind<'s>(cx: &mut Context<'_, 's>, e: &mut Expr<'s>) -> Option<Kind> {
+    pub(super) fn kind(cx: &mut Context<'_>, e: &mut Expr) -> Option<Kind> {
         match e {
-            Expr::FVar("Level:zero") => return Some(Kind::AlwaysZero),
-            Expr::App(f, _) if f.is_fvar("Level:s") => return Some(Kind::AlwaysNonzero),
+            &mut LEVEL_Z => return Some(Kind::AlwaysZero),
+            Expr::App(f, _) if **f == LEVEL_S => return Some(Kind::AlwaysNonzero),
             Expr::BVar(_) => return Some(Kind::SometimesZero),
             _ => {}
         }
 
         let exprs = Vec::new();
-        let cx = &mut cx.reborrow();
         let mut vars = Vars { cx, exprs };
         let mut n = Normalized::default();
         max(&mut n, &*term(&mut vars, e).ok()?).ok()?;
@@ -336,20 +368,20 @@ mod level {
         Max(Box<Term>, Box<Term>),
         IMax(Box<Term>, Box<Term>),
     }
-    struct Vars<'e, 's> {
-        cx: &'e mut Context<'e, 's>,
-        exprs: Vec<&'e mut Expr<'s>>,
+    struct Vars<'a, 'b, 'e> {
+        cx: &'a mut Context<'b>,
+        exprs: Vec<&'e mut Expr>,
     }
-    fn term<'e, 's>(vars: &mut Vars<'e, 's>, e: &'e mut Expr<'s>) -> Result<Box<Term>, ()> {
+    fn term<'e>(vars: &mut Vars<'_, '_, 'e>, e: &'e mut Expr) -> Result<Box<Term>, ()> {
         make_whnf(e);
         Ok(Box::new(match e {
-            Expr::FVar("Level:0") => Term::Zero,
-            _ if e.is_fvar_app("Level:s") => Term::Succ(term(vars, e.unwrap_app().1)?),
-            Expr::App(f, _) if f.is_fvar_app("Level:max") => {
+            &mut LEVEL_Z => Term::Zero,
+            _ if e.is_app(&LEVEL_S) => Term::Succ(term(vars, e.unwrap_app().1)?),
+            Expr::App(f, _) if f.is_app(&LEVEL_MAX) => {
                 let (f, b) = e.unwrap_app();
                 Term::Max(term(vars, f.unwrap_app().1)?, term(vars, b)?)
             }
-            Expr::App(f, _) if f.is_fvar_app("Level:imax") => {
+            Expr::App(f, _) if f.is_app(&LEVEL_IMAX) => {
                 let (f, b) = e.unwrap_app();
                 Term::IMax(term(vars, f.unwrap_app().1)?, term(vars, b)?)
             }
@@ -402,37 +434,102 @@ mod level {
             let mut total = 1_u16;
             #[allow(clippy::never_loop, unused_must_use)]
             for &(imax_with, add) in imax_adds.iter().rev() {
-                states & (1 << imax_with) == 0 && return Some(0);
                 total = total.checked_add(add)?;
+                states & (1 << imax_with) == 0 && return Some(total - 1);
                 offsets[imax_with as usize] = offsets[imax_with as usize].max(total);
             }
             (total - 1).checked_add(base)
         });
         let k = iter.try_fold(0, |acc, i| Some(acc.max(i?)))?;
-        Some((k.max(*offsets.iter().max().unwrap_or(&0)), offsets))
+        let result = (k.max(*offsets.iter().max().unwrap_or(&0)), offsets);
+        log::trace!("{states:16b} → {result:?}");
+        Some(result)
     }
 
     use super::*;
 }
 
-fn make_whnf(e: &mut Expr<'_>) {
-    while let Expr::App(f, arg) = e {
-        make_whnf(f);
-        match &mut **f {
-            Expr::Bind(Lam, _, body) => (body.subst(0, arg), *e = take(body)).1,
-            _ => break,
-        }
-    }
+enum WhnfNext<'e> {
+    Ind(usize, usize, u16),
+    Lam(&'e mut Expr),
 }
-fn whnf(mut e: Expr<'_>) -> Expr<'_> {
-    (make_whnf(&mut e), e).1
+fn make_whnf(e: &mut Expr) -> Option<WhnfNext<'_>> {
+    Some(loop {
+        match e {
+            Expr::App(f, arg) => match make_whnf(f)? {
+                WhnfNext::Lam(body) => (body.subst(arg), *e = take(body)).1,
+                WhnfNext::Ind(0, indices, constrs) => {
+                    make_whnf(arg);
+                    let mut constr = &mut **arg;
+                    let mut max_d = 0;
+                    let i = loop {
+                        match constr {
+                            Expr::App(lhs, _) => (max_d, constr) = (max_d + 1, lhs),
+                            &mut Expr::IndConstr(i, _) => break i,
+                            _ => return None,
+                        }
+                    };
+                    let mut base = &mut **f;
+                    for _ in 0..indices {
+                        base = base.unwrap_app().0;
+                    }
+                    let a = (0..constrs - 1 - i).fold(&mut *base, |acc, _| acc.unwrap_app().0);
+                    let constr_type = match replace(constr, a.unwrap_app().1.clone()) {
+                        Expr::IndConstr(_, mut ind) => ind.constrs.swap_remove(i as usize),
+                        _ => unreachable!(),
+                    };
+                    minor_premise_rec_args(base, &constr_type, max_d, 0, 0, constr);
+                    *e = take(constr);
+                }
+                WhnfNext::Ind(d, indices, constrs) => break WhnfNext::Ind(d - 1, indices, constrs),
+            },
+            Expr::Bind(Lam, _, body) => break WhnfNext::Lam(body),
+            Expr::IndElim(i) => {
+                let mut a = &mut *i.arity;
+                let mut indices = 0;
+                while let Expr::Bind(Pi, _, new_a) = a {
+                    (indices, a) = (indices + 1, new_a);
+                }
+                let depth = if i.sm { 1 } else { 2 } + i.constrs.len() + indices;
+                break WhnfNext::Ind(depth, indices, i.constrs.len() as u16);
+            }
+            _ => return None,
+        }
+    })
+}
+fn whnf(mut e: Expr) -> Expr {
+    make_whnf(&mut e);
+    e
 }
 
-fn constr<'s>(cx: &mut Context<'_, 's>, c: &Expr<'s>, d: u16) -> Result<Expr<'s>, String> {
+fn singleton(cx: &mut Context<'_>, res: &Expr, c: &Expr, d: u16, max_d: u16, level: &mut Expr) {
+    if let Expr::Bind(Pi, l, c) = c {
+        bind(cx, l, |cx, l_sort| {
+            let mut acc = res;
+            let referenced = loop {
+                match acc {
+                    Expr::App(_, r) if **r == Expr::BVar(max_d - 1 - d) => break true,
+                    Expr::App(new_acc, _) => acc = new_acc,
+                    _ => break false,
+                }
+            };
+            if !referenced {
+                let mut l_level = l_sort.into_finite().unwrap();
+                l_level.lower(0, d).unwrap();
+                *level = LEVEL_MAX.app([l_level, take(level)]);
+            }
+            singleton(cx, res, c, d + 1, max_d, level);
+            Ok(())
+        })
+        .unwrap()
+    }
+}
+
+fn constr(c: &Expr, d: u16) -> Result<(&Expr, u16), String> {
     Ok(match c {
-        &Expr::BVar(v) if v == d => Expr::FVar("Level:0"),
+        &Expr::BVar(v) if v == d => (c, d),
         Expr::App(_, r) if r.has_bvar(d) => return Err("invalid constructor".to_owned()),
-        Expr::App(l, _) => constr(cx, l, d)?,
+        Expr::App(l, _) => (constr(l, d)?, (c, d)).1,
         Expr::Bind(Pi, l, r) => {
             let msg = "depended-on parameter cannot reference type";
             match l.has_bvar(d) {
@@ -440,19 +537,13 @@ fn constr<'s>(cx: &mut Context<'_, 's>, c: &Expr<'s>, d: u16) -> Result<Expr<'s>
                 true => strict_positive(l, d)?,
                 false => {}
             }
-            bind(cx, l, |cx, left_sort| {
-                // TODO: Thrown away
-                let left_level = left_sort.into_finite().unwrap().lower(0, d).unwrap();
-                let rec = constr(cx, r, d + 1)?;
-                Ok(Expr::fvar_app("Level:max", [left_level, rec]))
-            })
-            .unwrap()
+            constr(r, d + 1)?
         }
         _ => return Err(format!("invalid expression in constructor: `{c:?}`")),
     })
 }
 
-fn strict_positive(e: &Expr<'_>, depth: u16) -> Result<(), String> {
+fn strict_positive(e: &Expr, depth: u16) -> Result<(), String> {
     match e {
         &Expr::BVar(v) if v == depth => Ok(()),
         Expr::App(_, r) if r.has_bvar(depth) => Err("not strict positive".to_owned()),
@@ -467,145 +558,99 @@ fn strict_positive(e: &Expr<'_>, depth: u16) -> Result<(), String> {
     }
 }
 
-fn telescope_map<'s, R>(e: &mut Expr<'s>, d: u16, f: impl FnOnce(&mut Expr<'s>, u16) -> R) -> R {
+fn telescope_map<R>(e: &mut Expr, d: u16, f: impl FnOnce(&mut Expr, u16) -> R) -> R {
     match e {
         Expr::Bind(Pi, _, r) => telescope_map(&mut *r, d + 1, f),
         _ => f(e, d),
     }
 }
 
-impl<'s> Expr<'s> {
+impl Expr {
     fn has_bvar(&self, n: u16) -> bool {
-        match self {
-            &Self::BVar(m) if n == m => true,
-            Self::Bind(_, l, r) => l.has_bvar(n) || r.has_bvar(n + 1),
-            Self::App(l, r) => l.has_bvar(n) || r.has_bvar(n),
-            Self::Ind(i) | Self::IndConstr(_, i) | Self::IndElim(i) | Self::IndIota(_, i) => {
-                i.has_bvar(n)
-            }
-            Self::FVar(_) | Self::BVar(_) | Self::Sortω(_) => false,
-        }
+        Result::is_err(&self.try_visit(n, &mut |n, e| match e {
+            &Self::BVar(m) if m == n => Err(()),
+            _ => Ok(()),
+        }))
     }
-    fn subst_with<F: ?Sized + FnMut(&mut Expr<'s>)>(&mut self, old: u16, new: &mut F) {
-        match self {
-            Self::BVar(n) if *n == old => (new(self), self.raise(0, old)).1,
-            Self::BVar(n) if *n > old => *n -= 1,
-            Self::Bind(_, l, r) => (l.subst_with(old, new), r.subst_with(old + 1, new)).0,
-            Self::App(l, r) => (l.subst_with(old, new), r.subst_with(old, new)).0,
-            Self::Ind(i) | Self::IndConstr(_, i) | Self::IndElim(i) | Self::IndIota(_, i) => {
-                i.subst_with(old, new)
-            }
-            Self::FVar(_) | Self::BVar(_) | Self::Sortω(_) => {}
-        }
+    fn subst_with<F: FnMut(&mut Expr)>(&mut self, mut subst: F) {
+        self.visit_mut(0, |old, e| match e {
+            Self::BVar(n) if old == *n => (subst(e), e.raise(0, old)).1,
+            Self::BVar(n) if old < *n => *n -= 1,
+            _ => {}
+        });
     }
-    fn subst(&mut self, old: u16, new: &Expr<'s>) {
-        self.subst_with(old, &mut |e| e.clone_from(new));
+    fn subst(&mut self, new: &Expr) {
+        self.subst_with(|e| e.clone_from(new));
     }
     fn raise(&mut self, depth: u16, by: u16) {
-        match self {
-            Self::BVar(n) if *n >= depth => *n += by,
-            Self::Bind(_, l, r) => (l.raise(depth, by), r.raise(depth + 1, by)).1,
-            Self::App(l, r) => (l.raise(depth, by), r.raise(depth, by)).1,
-            Self::Ind(i) | Self::IndConstr(_, i) | Self::IndElim(i) | Self::IndIota(_, i) => {
-                i.raise(depth, by)
-            }
-            Self::FVar(_) | Self::BVar(_) | Self::Sortω(_) => {}
-        }
-    }
-    fn lower(&self, depth: u16, by: u16) -> Option<Self> {
-        Some(match self {
-            &Self::BVar(n) if depth <= n && n < depth + by => return None,
-            &Self::BVar(n) if depth + by <= n => Self::BVar(n - by),
-            &Self::Bind(b, ref l, ref r) => {
-                let (l, r) = (l.lower(depth, by)?, r.lower(depth + 1, by)?);
-                Self::Bind(b, Box::new(l), Box::new(r))
-            }
-            Self::App(l, r) => l.lower(depth, by)?.app_n([r.lower(depth, by)?]),
-            Self::Ind(i) => Self::Ind(i.lower(depth, by)?),
-            &Self::IndConstr(n, ref i) => Self::IndConstr(n, i.lower(depth, by)?),
-            Self::IndElim(i) => Self::IndElim(i.lower(depth, by)?),
-            &Self::IndIota(n, ref i) => Self::IndIota(n, i.lower(depth, by)?),
-            Self::FVar(_) | Self::BVar(_) | Self::Sortω(_) => self.clone(),
+        self.visit_mut(depth, |depth, e| match e {
+            Self::BVar(n) if depth <= *n => *n += by,
+            _ => {}
         })
     }
-}
+    fn lower(&mut self, depth: u16, by: u16) -> Result<(), ()> {
+        self.try_visit_mut(depth, &mut |depth, e| {
+            match e {
+                &mut Self::BVar(n) if depth <= n && n < depth + by => return Err(()),
+                Self::BVar(n) if depth + by <= *n => *n -= by,
+                _ => {}
+            }
+            Ok(())
+        })
+    }
 
-impl<'s> Ind<'s> {
-    fn has_bvar(&self, n: u16) -> bool {
-        self.arity.has_bvar(n) || self.constrs.iter().any(|c| c.has_bvar(n + 1))
-    }
-    fn subst_with<F: ?Sized + FnMut(&mut Expr<'s>)>(&mut self, old: u16, new: &mut F) {
-        self.arity.subst_with(old, new);
-        self.constrs
-            .iter_mut()
-            .for_each(|c| c.subst_with(old + 1, new));
-    }
-    fn raise(&mut self, depth: u16, by: u16) {
-        self.arity.raise(depth, by);
-        self.constrs.iter_mut().for_each(|c| c.raise(depth + 1, by));
-    }
-    fn lower(&self, depth: u16, by: u16) -> Option<Self> {
-        let arity = Box::new(self.arity.lower(depth, by)?);
-        let constrs = self.constrs.iter().map(|c| c.lower(depth + 1, by));
-        let constrs = constrs.collect::<Option<_>>()?;
-        Some(Self { arity, constrs })
-    }
-}
-
-impl<'s> Expr<'s> {
-    fn into_sort(self) -> Result<Sort<'s>, Self> {
+    pub fn into_sort(self) -> Result<Sort, Self> {
         Ok(match self {
-            Expr::App(l, r) if l.is_fvar("Sort") => Sort::Sort(r),
+            Expr::App(l, r) if *l == SORT => Sort::Sort(r),
             Expr::Sortω(n) => Sort::Sortω(n),
             _ => return Err(self),
         })
     }
-    fn into_finite_sort(self) -> Result<Expr<'s>, Self> {
+    pub fn into_finite_sort(self) -> Result<Expr, Self> {
         match self {
-            Expr::App(l, r) if l.is_fvar("Sort") => Ok(*r),
+            Expr::App(l, r) if *l == SORT => Ok(*r),
             _ => Err(self),
         }
     }
-    fn as_finite_sort(&self) -> Option<&Expr<'s>> {
+    pub fn as_finite_sort(&self) -> Option<&Expr> {
         Some(match self {
-            Expr::App(l, r) if l.is_fvar("Sort") => r,
+            Expr::App(l, r) if **l == SORT => r,
             _ => return None,
         })
     }
-    fn as_finite_sort_mut(&mut self) -> Option<&mut Expr<'s>> {
+    pub fn as_finite_sort_mut(&mut self) -> Option<&mut Expr> {
         Some(match self {
-            Expr::App(l, r) if l.is_fvar("Sort") => r,
+            Expr::App(l, r) if **l == SORT => r,
             _ => return None,
         })
     }
-    fn expect_sort(self) -> Result<Sort<'s>, String> {
+    pub fn expect_sort(self) -> Result<Sort, String> {
         self.into_sort()
             .map_err(|e| format!("expression `{e:?}` not a sort"))
     }
 }
 #[derive(Debug)]
-enum Sort<'s> {
-    Sort(Box<Expr<'s>>),
+pub(crate) enum Sort {
+    Sort(Box<Expr>),
     Sortω(u16),
 }
-impl<'s> Sort<'s> {
-    fn into_finite(self) -> Result<Expr<'s>, Self> {
+impl Sort {
+    pub fn into_finite(self) -> Result<Expr, Self> {
         match self {
             Self::Sort(level) => Ok(*level),
             Sort::Sortω(_) => Err(self),
         }
     }
-    fn into_expr(self) -> Expr<'s> {
-        match self {
-            Self::Sort(e) => Expr::fvar_app("Sort", [e]),
-            Self::Sortω(n) => Expr::Sortω(n),
-        }
-    }
+}
+
+pub(crate) fn logging_enabled() -> bool {
+    log::log_enabled!(log::Level::Trace)
 }
 
 use crate::expr::Bind::*;
 use crate::expr::Expr;
 use crate::expr::Ind;
-use crate::expr::State;
 use crate::stack::Stack;
+use std::cmp;
+use std::mem::replace;
 use std::mem::take;

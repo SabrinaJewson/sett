@@ -1,14 +1,22 @@
-#![allow(clippy::short_circuit_statement, clippy::diverging_sub_expression)]
+#![allow(
+    clippy::short_circuit_statement,
+    clippy::diverging_sub_expression,
+    const_item_mutation
+)]
 
 fn main() {
-    eval::new_state();
+    eval::State::new();
 }
 
-mod eval;
-mod expr;
-mod kernel;
-mod parse;
 mod stack;
+
+mod expr;
+
+mod kernel;
+
+mod parse;
+
+mod eval;
 
 #[cfg(test)]
 mod tests;

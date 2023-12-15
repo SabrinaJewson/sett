@@ -1,49 +1,50 @@
-pub(crate) fn new_state() -> State<'static> {
-    let defs = HashMap::new();
-    let mut st = State { defs };
-    for (name, r#type) in BUILTINS {
-        let r#type = match parse::whole_expr(r#type) {
-            Ok(r#type) => r#type,
-            Err(e) => panic!("invalid builtin {name} of type `{type}` : {e}"),
-        };
-        st.defs.insert(name, (r#type, None));
-    }
-    if let Err(e) = parse::parse(&mut st, PRELUDE) {
-        panic!("invalid prelude: {e}");
-    }
-    st
+pub(crate) struct State {
+    parse: parse::State<'static>,
+    meta_m_unit: Expr,
 }
 
-pub(crate) fn eval<'s>(st: &mut State<'s>, s: &'s str) -> Result<(), String> {
-    let expr = parse::whole_expr(s)?;
-    let id = parse::whole_expr("λ x: MetaM (PUnit (Sort (Level:s Level:0))), x").unwrap();
-    let expr = Expr::App(Box::new(id), Box::new(expr));
-    kernel::check(st, &expr)?;
-    Ok(())
+impl State {
+    pub fn new() -> Self {
+        let mut parse = parse::State::new();
+        let builtins = &[(
+            "MetaM",
+            "∀ α: Sort (Level:s Level:0), Sort (Level:s Level:0)",
+        )];
+        for (name, r#type) in builtins {
+            let r#type = parse.whole_expr(r#type).unwrap();
+            let n = parse.kernel.add(r#type, None);
+            parse.alias(name, Expr::FVar(n)).unwrap();
+        }
+        parse.parse(PRELUDE).expect("invalid prelude");
+        let meta_m_unit = parse
+            .whole_expr("MetaM (PUnit (Sort (Level:s Level:0)))")
+            .unwrap();
+        Self { parse, meta_m_unit }
+    }
+    pub fn eval(&mut self, s: &str) -> Result<(), String> {
+        let e = self.parse.whole_expr(s)?;
+        let e = Expr::BVar(0).bind(Lam, self.meta_m_unit.clone()).app([e]);
+        self.parse.kernel.type_check(&e).unwrap();
+        Ok(())
+    }
 }
-
-#[rustfmt::skip]
-const BUILTINS: &[(&str, &str)] = &[
-    ("Level", "Sort (Level:s Level:0)"),
-    ("Level:0", "Level"),
-    ("Level:s", "∀ u: Level, Level"),
-    ("Level:max", "∀ u: Level, ∀ v: Level, Level"),
-    ("Level:imax", "∀ u: Level, ∀ v: Level, Level"),
-    ("Sort", "∀ l: Level, Sort (Level:s l)"),
-    ("MetaM", "∀ α: Sort (Level:s Level:0), Sort (Level:s Level:0)"),
-    //("print", "
-    //("read_file", "∀ path:"),
-];
 
 const PRELUDE: &str = "
-    def Eq := λ u: Level, λ α: Sort u, Ind (
-        Self: ∀ a: α, ∀ b: α, Sort Level:0,
-        ∀ a: α, Self a a
-    )
-    with Eq:eq_ind
+    def Eq := λ u: Level, λ α: Sort u, Ind (Self: ∀ a: α, ∀ b: α, Sort Level:0, ∀ a: α, Self a a),
+    with Eq:def: ∀ u: Level,
+        (λ α: Sort (Level:s u), Ind (Self: ∀ a: α, ∀ b: α, Sort Level:0, ∀ a: α, Self a a))
+        (∀ α: Sort u, ∀ a: α, ∀ b: α, Sort Level:0)
+        (Eq u)
+        (λ α: Sort u, Ind (Self: ∀ a: α, ∀ b: α, Sort Level:0, ∀ a: α, Self a a))
+        := λ u: Level,
+            (λ α: Sort (Level:s u), Ind:constr 0 (Self: ∀ a: α, ∀ b: α, Sort Level:0, ∀ a: α, Self a a))
+            (∀ α: Sort u, ∀ a: α, ∀ b: α, Sort Level:0)
+            (Eq u);
+    ";
+/*
 
     def PUnit := λ u: Level, Ind (Self: Sort u, Self)
-    with PUnit:eq_ind
+    with PUnit:eq_ind;
 
     def id := λ u: Level, λ α: Sort u, λ a: α, a
     with id:def
@@ -64,9 +65,8 @@ const PRELUDE: &str = "
             ∀ of_to: ∀ a: α, Eq u α (of (to a)) a, ∀ to_of: ∀ b: β, Eq v β (to (of b)) b, Self)
     with ↔:eq_ind
 ";
+    */
 
+use crate::expr::Bind::*;
 use crate::expr::Expr;
-use crate::expr::State;
-use crate::kernel;
 use crate::parse;
-use std::collections::HashMap;
