@@ -3,7 +3,8 @@ pub(crate) enum Expr {
     FVar(u32),
     BVar(u16),
     Sortω(u16),
-    Bind(Bind, Box<Expr>, Box<Expr>),
+    Lam(Box<Expr>, Box<Expr>),
+    Pi(Box<Expr>, Box<Expr>),
     App(Box<Expr>, Box<Expr>),
     Ind(Ind),
     IndConstr(u16, Ind),
@@ -29,13 +30,17 @@ impl Debug for Expr {
             }),
             Self::BVar(n) => write!(f, "_{n}"),
             Self::Sortω(n) => write!(f, "Sortω {n}"),
-            Self::Bind(b, l, r) => match &**l {
-                Self::Bind(_, _, _) | Self::App(_, _) => write!(f, "{b:?} _: ({l:?}), {r:?}"),
-                _ => write!(f, "{b:?} _: {l:?}, {r:?}"),
+            Self::Lam(l, r) => match &**l {
+                Self::Pi(_, _) | Self::App(_, _) => write!(f, "λ _: ({l:?}), {r:?}"),
+                _ => write!(f, "λ _: {l:?}, {r:?}"),
+            },
+            Self::Pi(l, r) => match &**l {
+                Self::Pi(_, _) | Self::App(_, _) => write!(f, "∀ _: ({l:?}), {r:?}"),
+                _ => write!(f, "∀ _: {l:?}, {r:?}"),
             },
             Self::App(l, r) => {
                 match &**l {
-                    Self::Bind(_, _, _) => write!(f, "({l:?}) ")?,
+                    Self::Lam(_, _) => write!(f, "({l:?}) ")?,
                     _ => write!(f, "{l:?} ")?,
                 }
                 match &**r {
@@ -46,21 +51,6 @@ impl Debug for Expr {
             Self::Ind(i) => write!(f, "Ind {i:?}"),
             Self::IndConstr(n, i) => write!(f, "Ind:constr {n} {i:?}"),
             Self::IndElim(i) => write!(f, "Ind:elim {i:?}"),
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(crate) enum Bind {
-    Pi,
-    Lam,
-}
-
-impl Debug for Bind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Pi => f.write_str("∀"),
-            Self::Lam => f.write_str("λ"),
         }
     }
 }
@@ -93,7 +83,7 @@ macro_rules! visit {
                 F: FnMut(u16, &$($mut)? Expr) -> Result<(), E>,
             {
                 match self {
-                    Expr::Bind(_, l, r) => (l.$ident(depth, f)?, r.$ident(depth + 1, f)?).1,
+                    Expr::Lam(l, r) | Expr::Pi(l, r) => (l.$ident(depth, f)?, r.$ident(depth + 1, f)?).1,
                     Expr::App(l, r) => (l.$ident(depth, f)?, r.$ident(depth, f)?).1,
                     Expr::Ind(i) | Expr::IndConstr(_, i) | Expr::IndElim(i) => i.$ident(depth, f)?,
                     _ => {}
@@ -115,8 +105,11 @@ macro_rules! visit {
 visit!(try_visit, try_visit_mut mut);
 
 impl Expr {
-    pub fn bind(self, kind: Bind, r#type: impl Into<Box<Expr>>) -> Self {
-        Self::Bind(kind, r#type.into(), Box::new(self))
+    pub fn lam(self, r#type: impl Into<Box<Expr>>) -> Self {
+        Self::Lam(r#type.into(), Box::new(self))
+    }
+    pub fn pi(self, r#type: impl Into<Box<Expr>>) -> Self {
+        Self::Pi(r#type.into(), Box::new(self))
     }
     pub fn app<T: Into<Box<Expr>>>(self, args: impl IntoIterator<Item = T>) -> Self {
         args.into_iter()

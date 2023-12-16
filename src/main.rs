@@ -5,7 +5,7 @@
 )]
 
 fn main() {
-    eval::State::new();
+    kernel::State::new();
 }
 
 mod stack;
@@ -14,7 +14,7 @@ mod expr;
 
 mod kernel;
 
-mod eval;
+// mod eval;
 
 //mod parse;
 

@@ -19,10 +19,10 @@ impl State {
         let mut this = State { defs };
         this.add(SORT.app([LEVEL_S.app([LEVEL_Z])]));
         this.add(LEVEL);
-        this.add(LEVEL.bind(Pi, LEVEL));
-        this.add(LEVEL.bind(Pi, LEVEL).bind(Pi, LEVEL));
-        this.add(LEVEL.bind(Pi, LEVEL).bind(Pi, LEVEL));
-        this.add(SORT.app([LEVEL_S.app([Expr::BVar(0)])]).bind(Pi, LEVEL));
+        this.add(LEVEL.pi(LEVEL));
+        this.add(LEVEL.pi(LEVEL).pi(LEVEL));
+        this.add(LEVEL.pi(LEVEL).pi(LEVEL));
+        this.add(SORT.app([LEVEL_S.app([Expr::BVar(0)])]).pi(LEVEL));
         this
     }
     pub fn add(&mut self, r#type: Expr) -> u32 {
@@ -57,8 +57,8 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
             (ty.raise(0, n + 1), ty).1
         }
         Expr::Sortω(l) => Expr::Sortω(l.checked_add(1).ok_or("levelω overflow")?),
-        Expr::Bind(Lam, l, r) => bind(cx, l, |cx, _| Ok(type_of(cx, r)?.bind(Pi, l.clone())))?,
-        Expr::Bind(Pi, l, r) => bind(cx, l, |cx, l_sort| {
+        Expr::Lam(l, r) => bind(cx, l, |cx, _| Ok(type_of(cx, r)?.pi(l.clone())))?,
+        Expr::Pi(l, r) => bind(cx, l, |cx, l_sort| {
             Ok(match (l_sort, type_of(cx, r)?.expect_sort()?) {
                 (Sort::Sort(l), Sort::Sort(mut r)) => match r.lower(0, 1) {
                     Ok(()) => SORT.app([LEVEL_IMAX.app([l, r])]),
@@ -70,7 +70,7 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
             })
         })?,
         Expr::App(l, r) => match whnf(type_of(cx, l)?) {
-            Expr::Bind(Pi, mut f_in, mut f_out) => {
+            Expr::Pi(mut f_in, mut f_out) => {
                 let mut r_type = type_of(cx, r)?;
                 ensure_def_eq(cx, &mut f_in, &mut r_type)?;
                 (f_out.subst(r), *f_out).1
@@ -95,7 +95,7 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
                 i.raise(0, universe_params + 1 + constrs + d);
                 let major_premise = i.app((0..d).rev().map(Expr::BVar));
                 let out = Expr::BVar(1 + d + constrs).app((0..=d).rev().map(Expr::BVar));
-                *e = out.bind(Pi, major_premise);
+                *e = out.pi(major_premise);
             });
             for (k, c) in i.constrs.iter().enumerate().rev() {
                 let mut minor_premise = c.clone();
@@ -105,7 +105,7 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
                     let constr = Expr::IndConstr(k as u16, i.clone());
                     *recs = minor_premise_recs(c, constr, [universe_params, k as u16, max_d, 0, 0])
                 });
-                t = t.bind(Pi, minor_premise);
+                t = t.pi(minor_premise);
             }
             let mut motive_type = i.arity.clone();
             motive_type.raise(0, universe_params);
@@ -114,10 +114,10 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
                 ind.raise(0, universe_params + d);
                 let v = ind.app((0..d).rev().map(Expr::BVar));
                 let rhs = if i.sm { LEVEL_Z } else { Expr::BVar(1 + d) };
-                *e = SORT.app([rhs]).bind(Pi, v);
+                *e = SORT.app([rhs]).pi(v);
             });
-            t = t.bind(Pi, motive_type);
-            t = if i.sm { t } else { t.bind(Pi, LEVEL) };
+            t = t.pi(motive_type);
+            t = if i.sm { t } else { t.pi(LEVEL) };
             t
         }
     };
@@ -170,7 +170,7 @@ fn minor_premise_recs(c: &Expr, mut constr: Expr, [u, i, max_d, d, rec]: [u16; 5
             constr.raise(0, u + 1 + i + d + rec);
             c.app([constr.app((rec..rec + d).rev().map(Expr::BVar))])
         }
-        Expr::Bind(Pi, l, c) if l.has_bvar(d) => {
+        Expr::Pi(l, c) if l.has_bvar(d) => {
             let mut l = l.clone();
             l.raise(d + 1, u);
             l.raise(d, i);
@@ -180,9 +180,9 @@ fn minor_premise_recs(c: &Expr, mut constr: Expr, [u, i, max_d, d, rec]: [u16; 5
                 let a = a.app((0..args).rev().map(Expr::BVar));
                 *e = take(e).app([a]);
             });
-            minor_premise_recs(c, constr, [u, i, max_d, d + 1, rec + 1]).bind(Pi, l)
+            minor_premise_recs(c, constr, [u, i, max_d, d + 1, rec + 1]).pi(l)
         }
-        Expr::Bind(Pi, _, c) => minor_premise_recs(c, constr, [u, i, max_d, d + 1, rec]),
+        Expr::Pi(_, c) => minor_premise_recs(c, constr, [u, i, max_d, d + 1, rec]),
         _ => unreachable!("not a constructor type: {c:?}"),
     }
 }
@@ -190,7 +190,7 @@ fn minor_premise_recs(c: &Expr, mut constr: Expr, [u, i, max_d, d, rec]: [u16; 5
 fn minor_premise_rec_args(base: &Expr, c: &Expr, max_d: u16, d: u16, rec: u16, res: &mut Expr) {
     match c {
         Expr::BVar(_) | Expr::App(_, _) => {}
-        Expr::Bind(Pi, l, c) if l.has_bvar(d) => {
+        Expr::Pi(l, c) if l.has_bvar(d) => {
             let mut l = l.clone();
             let mut acc = &mut *res;
             let mut relevant_arg = None;
@@ -218,7 +218,7 @@ fn minor_premise_rec_args(base: &Expr, c: &Expr, max_d: u16, d: u16, rec: u16, r
             *res = take(res).app([l]);
             minor_premise_rec_args(base, c, max_d, d + 1, rec + 1, res);
         }
-        Expr::Bind(Pi, _, c) => minor_premise_rec_args(base, c, max_d, d + 1, rec, res),
+        Expr::Pi(_, c) => minor_premise_rec_args(base, c, max_d, d + 1, rec, res),
         _ => unreachable!(),
     }
 }
@@ -227,7 +227,7 @@ fn arity(cx: &mut Context<'_>, a: &Expr, d: u16) -> Result<Expr, String> {
     if let Some(mut e) = a.as_finite_sort().cloned() {
         let msg = "universe level cannot depend on indices";
         (e.lower(0, d).map_err(|()| msg)?, Ok(e)).1
-    } else if let Expr::Bind(Pi, l, r) = a {
+    } else if let Expr::Pi(l, r) = a {
         bind(cx, l, |cx, _| arity(cx, r, d + 1))
     } else {
         Err(format!("{a:?} not a valid arity"))
@@ -266,8 +266,11 @@ fn def_eq(cx: &mut Context<'_>, lhs: &mut Expr, rhs: &mut Expr) -> bool {
         (Expr::FVar(a), Expr::FVar(b)) => a == b,
         (Expr::BVar(n), Expr::BVar(m)) => n == m,
         (Expr::Sortω(n), Expr::Sortω(m)) => n == m,
-        (Expr::Bind(a, b, c), Expr::Bind(d, e, f)) => {
-            a == d && def_eq(cx, b, e) && bind(cx, b, |cx, _| Ok(def_eq(cx, c, f))).unwrap()
+        (Expr::Pi(a, b), Expr::Pi(c, d)) => {
+            def_eq(cx, a, c) && bind(cx, a, |cx, _| Ok(def_eq(cx, b, d))).unwrap()
+        }
+        (Expr::Lam(a, b), Expr::Lam(c, d)) => {
+            def_eq(cx, a, c) && bind(cx, a, |cx, _| Ok(def_eq(cx, b, d))).unwrap()
         }
         (Expr::App(a, b), Expr::App(c, d)) => def_eq(cx, a, c) && def_eq(cx, b, d),
         (Expr::Ind(a), Expr::Ind(b)) => ind_def_eq(cx, a, b),
@@ -484,11 +487,11 @@ fn make_whnf(e: &mut Expr) -> Option<WhnfNext<'_>> {
                 }
                 WhnfNext::Ind(d, indices, constrs) => break WhnfNext::Ind(d - 1, indices, constrs),
             },
-            Expr::Bind(Lam, _, body) => break WhnfNext::Lam(body),
+            Expr::Lam(_, body) => break WhnfNext::Lam(body),
             Expr::IndElim(i) => {
                 let mut a = &mut *i.arity;
                 let mut indices = 0;
-                while let Expr::Bind(Pi, _, new_a) = a {
+                while let Expr::Pi(_, new_a) = a {
                     (indices, a) = (indices + 1, new_a);
                 }
                 let depth = if i.sm { 1 } else { 2 } + i.constrs.len() + indices;
@@ -504,7 +507,7 @@ fn whnf(mut e: Expr) -> Expr {
 }
 
 fn singleton(cx: &mut Context<'_>, res: &Expr, c: &Expr, d: u16, max_d: u16, level: &mut Expr) {
-    if let Expr::Bind(Pi, l, c) = c {
+    if let Expr::Pi(l, c) = c {
         bind(cx, l, |cx, l_sort| {
             let mut acc = res;
             let referenced = loop {
@@ -531,7 +534,7 @@ fn constr(c: &Expr, d: u16) -> Result<(&Expr, u16), String> {
         &Expr::BVar(v) if v == d => (c, d),
         Expr::App(_, r) if r.has_bvar(d) => return Err("invalid constructor".to_owned()),
         Expr::App(l, _) => (constr(l, d)?, (c, d)).1,
-        Expr::Bind(Pi, l, r) => {
+        Expr::Pi(l, r) => {
             let msg = "depended-on parameter cannot reference type";
             match l.has_bvar(d) {
                 true if r.has_bvar(0) => return Err(msg.to_owned()),
@@ -549,7 +552,7 @@ fn strict_positive(e: &Expr, depth: u16) -> Result<(), String> {
         &Expr::BVar(v) if v == depth => Ok(()),
         Expr::App(_, r) if r.has_bvar(depth) => Err("not strict positive".to_owned()),
         Expr::App(l, _) => strict_positive(l, depth),
-        Expr::Bind(Pi, l, r) => {
+        Expr::Pi(l, r) => {
             if l.has_bvar(depth) {
                 return Err("not strict positive".to_owned());
             }
@@ -561,7 +564,7 @@ fn strict_positive(e: &Expr, depth: u16) -> Result<(), String> {
 
 fn telescope_map<R>(e: &mut Expr, d: u16, f: impl FnOnce(&mut Expr, u16) -> R) -> R {
     match e {
-        Expr::Bind(Pi, _, r) => telescope_map(&mut *r, d + 1, f),
+        Expr::Pi(_, r) => telescope_map(&mut *r, d + 1, f),
         _ => f(e, d),
     }
 }
@@ -648,7 +651,6 @@ pub(crate) fn logging_enabled() -> bool {
     log::log_enabled!(log::Level::Trace)
 }
 
-use crate::expr::Bind::*;
 use crate::expr::Expr;
 use crate::expr::Ind;
 use crate::stack::Stack;
