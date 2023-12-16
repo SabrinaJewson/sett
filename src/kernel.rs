@@ -58,15 +58,15 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
         }
         Expr::Sortω(l) => Expr::Sortω(l.checked_add(1).ok_or("levelω overflow")?),
         Expr::Lam(l, r) => bind(cx, l, |cx, _| Ok(type_of(cx, r)?.pi(l.clone())))?,
-        Expr::Pi(l, r) => bind(cx, l, |cx, l_sort| {
-            Ok(match (l_sort, type_of(cx, r)?.expect_sort()?) {
-                (Sort::Sort(l), Sort::Sort(mut r)) => match r.lower(0, 1) {
+        Expr::Pi(l, r) => bind(cx, l, |cx, l_univ| {
+            Ok(match (l_univ, type_of(cx, r)?.expect_univ()?) {
+                (Univ::Sort(l), Univ::Sort(mut r)) => match r.lower(0, 1) {
                     Ok(()) => SORT.app([LEVEL_IMAX.app([l, r])]),
                     Err(()) => Expr::Sortω(0),
                 },
-                (Sort::Sortω(a), Sort::Sort(_)) => Expr::Sortω(a),
-                (Sort::Sort(_), Sort::Sortω(a)) => Expr::Sortω(a),
-                (Sort::Sortω(a), Sort::Sortω(b)) => Expr::Sortω(Ord::max(a, b)),
+                (Univ::Sortω(a), Univ::Sort(_)) => Expr::Sortω(a),
+                (Univ::Sort(_), Univ::Sortω(a)) => Expr::Sortω(a),
+                (Univ::Sortω(a), Univ::Sortω(b)) => Expr::Sortω(Ord::max(a, b)),
             })
         })?,
         Expr::App(l, r) => match whnf(type_of(cx, l)?) {
@@ -86,13 +86,13 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
         }
         Expr::IndElim(i) => {
             ind_check(cx, i)?;
-            let universe_params = if i.sm { 0 } else { 1 };
+            let univ_params = if i.sm { 0 } else { 1 };
             let constrs = i.constrs.len() as u16;
             let mut t = (*i.arity).clone();
-            t.raise(0, universe_params + 1 + constrs);
+            t.raise(0, univ_params + 1 + constrs);
             telescope_map(&mut t, 0, |e, d| {
                 let mut i = Expr::Ind(i.clone());
-                i.raise(0, universe_params + 1 + constrs + d);
+                i.raise(0, univ_params + 1 + constrs + d);
                 let major_premise = i.app((0..d).rev().map(Expr::BVar));
                 let out = Expr::BVar(1 + d + constrs).app((0..=d).rev().map(Expr::BVar));
                 *e = out.pi(major_premise);
@@ -100,18 +100,18 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
             for (k, c) in i.constrs.iter().enumerate().rev() {
                 let mut minor_premise = c.clone();
                 minor_premise.subst_with(|e| *e = Expr::Ind(i.clone()));
-                minor_premise.raise(0, universe_params + 1 + k as u16);
+                minor_premise.raise(0, univ_params + 1 + k as u16);
                 telescope_map(&mut minor_premise, 0, |recs, max_d| {
                     let constr = Expr::IndConstr(k as u16, i.clone());
-                    *recs = minor_premise_recs(c, constr, [universe_params, k as u16, max_d, 0, 0])
+                    *recs = minor_premise_recs(c, constr, [univ_params, k as u16, max_d, 0, 0])
                 });
                 t = t.pi(minor_premise);
             }
             let mut motive_type = i.arity.clone();
-            motive_type.raise(0, universe_params);
+            motive_type.raise(0, univ_params);
             telescope_map(&mut motive_type, 0, |e, d| {
                 let mut ind = Expr::Ind(i.clone());
-                ind.raise(0, universe_params + d);
+                ind.raise(0, univ_params + d);
                 let v = ind.app((0..d).rev().map(Expr::BVar));
                 let rhs = if i.sm { LEVEL_Z } else { Expr::BVar(1 + d) };
                 *e = SORT.app([rhs]).pi(v);
@@ -127,19 +127,19 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
 }
 
 fn ind_check(cx: &mut Context<'_>, ind: &Ind) -> Result<(), String> {
-    let mut base_sort = arity(cx, &ind.arity, 0)?;
-    let level_kind = level::kind(cx, &mut base_sort).ok_or("invalid sort for inductive type")?;
+    let mut base_level = arity(cx, &ind.arity, 0)?;
+    let level_kind = level::kind(cx, &mut base_level).ok_or("invalid level for inductive type")?;
     if ind.sm && !matches!(level_kind, level::Kind::AlwaysZero) {
         return Err("small elimination allowed for inductive propositions only".to_owned());
     }
 
-    let mut base_sort = SORT.app([base_sort]);
-    base_sort.raise(0, 1);
+    let mut base_univ = SORT.app([base_level]);
+    base_univ.raise(0, 1);
     u16::try_from(ind.constrs.len()).map_err(|_| "too many constructors")?;
     bind(cx, &ind.arity, |cx, _| {
         for c in &ind.constrs {
-            let mut sort = type_of(cx, c)?;
-            ensure_def_eq(cx, &mut base_sort, &mut sort)?;
+            let mut univ = type_of(cx, c)?;
+            ensure_def_eq(cx, &mut base_univ, &mut univ)?;
 
             let (resultant_type, max_d) = constr(c, 0)?;
             match level_kind {
@@ -147,9 +147,9 @@ fn ind_check(cx: &mut Context<'_>, ind: &Ind) -> Result<(), String> {
                 level::Kind::AlwaysNonzero => {}
                 _ if 1 < ind.constrs.len() => return Err(">1 constructor".to_owned()),
                 _ => {
-                    let mut level = sort.into_finite_sort().unwrap();
+                    let mut level = univ.into_level().unwrap();
                     singleton(cx, resultant_type, c, 0, max_d, &mut level);
-                    let base_level = base_sort.as_finite_sort_mut().unwrap();
+                    let base_level = base_univ.as_level_mut().unwrap();
                     ensure_def_eq(cx, base_level, &mut level)?;
                 }
             }
@@ -224,7 +224,7 @@ fn minor_premise_rec_args(base: &Expr, c: &Expr, max_d: u16, d: u16, rec: u16, r
 }
 
 fn arity(cx: &mut Context<'_>, a: &Expr, d: u16) -> Result<Expr, String> {
-    if let Some(mut e) = a.as_finite_sort().cloned() {
+    if let Some(mut e) = a.as_level().cloned() {
         let msg = "universe level cannot depend on indices";
         (e.lower(0, d).map_err(|()| msg)?, Ok(e)).1
     } else if let Expr::Pi(l, r) = a {
@@ -236,13 +236,13 @@ fn arity(cx: &mut Context<'_>, a: &Expr, d: u16) -> Result<Expr, String> {
 
 fn bind<R, F>(cx: &mut Context<'_>, expr: &Expr, f: F) -> Result<R, String>
 where
-    F: FnOnce(&mut Context<'_>, Sort) -> Result<R, String>,
+    F: FnOnce(&mut Context<'_>, Univ) -> Result<R, String>,
 {
-    let sort = type_of(cx, expr)?.expect_sort()?;
+    let univ = type_of(cx, expr)?.expect_univ()?;
     let (st, depth) = (&mut *cx.st, cx.depth);
     cx.bvars.reborrow().with(expr, move |bvars| {
         let mut cx = Context { st, bvars, depth };
-        f(&mut cx, sort)
+        f(&mut cx, univ)
     })
 }
 
@@ -302,11 +302,11 @@ fn uip(cx: &mut Context<'_>, lhs: &mut Expr, rhs: &mut Expr) -> bool {
     if not_proof(lhs) || not_proof(rhs) {
         return false;
     }
-    let mut lhs_type = type_of(cx, lhs).unwrap();
-    if let Sort::Sort(mut level) = type_of(cx, &lhs_type).unwrap().into_sort().unwrap() {
+    let mut lhs_sort = type_of(cx, lhs).unwrap();
+    if let Univ::Sort(mut level) = type_of(cx, &lhs_sort).unwrap().into_univ().unwrap() {
         if def_eq(cx, &mut level, &mut LEVEL_Z) {
-            let mut rhs_type = type_of(cx, rhs).unwrap();
-            let _ = def_eq(cx, &mut lhs_type, &mut rhs_type) && return true;
+            let mut rhs_sort = type_of(cx, rhs).unwrap();
+            let _ = def_eq(cx, &mut lhs_sort, &mut rhs_sort) && return true;
         }
     }
     false
@@ -478,11 +478,11 @@ fn make_whnf(e: &mut Expr) -> Option<WhnfNext<'_>> {
                         base = base.unwrap_app().0;
                     }
                     let a = (0..constrs - 1 - i).fold(&mut *base, |acc, _| acc.unwrap_app().0);
-                    let constr_type = match replace(constr, a.unwrap_app().1.clone()) {
+                    let constr_sort = match replace(constr, a.unwrap_app().1.clone()) {
                         Expr::IndConstr(_, mut ind) => ind.constrs.swap_remove(i as usize),
                         _ => unreachable!(),
                     };
-                    minor_premise_rec_args(base, &constr_type, max_d, 0, 0, arg);
+                    minor_premise_rec_args(base, &constr_sort, max_d, 0, 0, arg);
                     *e = take(arg);
                 }
                 WhnfNext::Ind(d, indices, constrs) => break WhnfNext::Ind(d - 1, indices, constrs),
@@ -508,7 +508,7 @@ fn whnf(mut e: Expr) -> Expr {
 
 fn singleton(cx: &mut Context<'_>, res: &Expr, c: &Expr, d: u16, max_d: u16, level: &mut Expr) {
     if let Expr::Pi(l, c) = c {
-        bind(cx, l, |cx, l_sort| {
+        bind(cx, l, |cx, l_univ| {
             let mut acc = res;
             let referenced = loop {
                 match acc {
@@ -518,7 +518,7 @@ fn singleton(cx: &mut Context<'_>, res: &Expr, c: &Expr, d: u16, max_d: u16, lev
                 }
             };
             if !referenced {
-                let mut l_level = l_sort.into_finite().unwrap();
+                let mut l_level = l_univ.into_level().unwrap();
                 l_level.lower(0, d).unwrap();
                 *level = LEVEL_MAX.app([l_level, take(level)]);
             }
@@ -603,46 +603,46 @@ impl Expr {
         })
     }
 
-    pub fn into_sort(self) -> Result<Sort, Self> {
+    pub fn into_univ(self) -> Result<Univ, Self> {
         Ok(match self {
-            Expr::App(l, r) if *l == SORT => Sort::Sort(r),
-            Expr::Sortω(n) => Sort::Sortω(n),
+            Expr::App(l, r) if *l == SORT => Univ::Sort(r),
+            Expr::Sortω(n) => Univ::Sortω(n),
             _ => return Err(self),
         })
     }
-    pub fn into_finite_sort(self) -> Result<Expr, Self> {
+    pub fn into_level(self) -> Result<Expr, Self> {
         match self {
             Expr::App(l, r) if *l == SORT => Ok(*r),
             _ => Err(self),
         }
     }
-    pub fn as_finite_sort(&self) -> Option<&Expr> {
+    pub fn as_level(&self) -> Option<&Expr> {
         Some(match self {
             Expr::App(l, r) if **l == SORT => r,
             _ => return None,
         })
     }
-    pub fn as_finite_sort_mut(&mut self) -> Option<&mut Expr> {
+    pub fn as_level_mut(&mut self) -> Option<&mut Expr> {
         Some(match self {
             Expr::App(l, r) if **l == SORT => r,
             _ => return None,
         })
     }
-    pub fn expect_sort(self) -> Result<Sort, String> {
-        self.into_sort()
+    pub fn expect_univ(self) -> Result<Univ, String> {
+        self.into_univ()
             .map_err(|e| format!("expression `{e:?}` not a sort"))
     }
 }
 #[derive(Debug)]
-pub(crate) enum Sort {
+pub(crate) enum Univ {
     Sort(Box<Expr>),
     Sortω(u16),
 }
-impl Sort {
-    pub fn into_finite(self) -> Result<Expr, Self> {
+impl Univ {
+    pub fn into_level(self) -> Result<Expr, Self> {
         match self {
             Self::Sort(level) => Ok(*level),
-            Sort::Sortω(_) => Err(self),
+            Univ::Sortω(_) => Err(self),
         }
     }
 }
