@@ -6,9 +6,9 @@ pub(crate) enum Expr {
     Lam(Box<Expr>, Box<Expr>),
     Pi(Box<Expr>, Box<Expr>),
     App(Box<Expr>, Box<Expr>),
-    Ind(Ind),
-    IndConstr(u16, Ind),
-    IndElim(Ind),
+    Ind(Box<Ind>),
+    IndConstr(u16, Box<Ind>),
+    IndElim(Box<Ind>),
 }
 
 impl Default for Expr {
@@ -58,7 +58,7 @@ impl Debug for Expr {
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct Ind {
     pub sm: bool,
-    pub arity: Box<Expr>,
+    pub arity: Expr,
     pub constrs: Vec<Expr>,
 }
 

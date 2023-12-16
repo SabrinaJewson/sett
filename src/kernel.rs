@@ -77,7 +77,7 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
             }
             t => return Err(format!("application LHS `{l:?} : {t:?}` not Π type")),
         },
-        Expr::Ind(i) => (ind_check(cx, i)?, (*i.arity).clone()).1,
+        Expr::Ind(i) => (ind_check(cx, i)?, i.arity.clone()).1,
         &Expr::IndConstr(n, ref i) => {
             ind_check(cx, i)?;
             let c = i.constrs.get(usize::from(n)).cloned();
@@ -88,7 +88,7 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
             ind_check(cx, i)?;
             let univ_params = if i.sm { 0 } else { 1 };
             let constrs = i.constrs.len() as u16;
-            let mut t = (*i.arity).clone();
+            let mut t = i.arity.clone();
             t.raise(0, univ_params + 1 + constrs);
             telescope_map(&mut t, 0, |e, d| {
                 let mut i = Expr::Ind(i.clone());
@@ -489,7 +489,7 @@ fn make_whnf(e: &mut Expr) -> Option<WhnfNext<'_>> {
             },
             Expr::Lam(_, body) => break WhnfNext::Lam(body),
             Expr::IndElim(i) => {
-                let mut a = &mut *i.arity;
+                let mut a = &mut i.arity;
                 let mut indices = 0;
                 while let Expr::Pi(_, new_a) = a {
                     (indices, a) = (indices + 1, new_a);
