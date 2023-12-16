@@ -1,42 +1,43 @@
 pub(crate) struct State {
-    defs: Vec<(Expr, Option<Expr>)>,
+    defs: Vec<Expr>,
 }
 
-pub(crate) const LEVEL: Expr = Expr::FVar(0);
-pub(crate) const LEVEL_Z: Expr = Expr::FVar(1);
-pub(crate) const LEVEL_S: Expr = Expr::FVar(2);
-pub(crate) const LEVEL_MAX: Expr = Expr::FVar(3);
-pub(crate) const LEVEL_IMAX: Expr = Expr::FVar(4);
-pub(crate) const SORT: Expr = Expr::FVar(5);
+pub(crate) mod consts {
+    pub(crate) const LEVEL: Expr = Expr::FVar(0);
+    pub(crate) const LEVEL_Z: Expr = Expr::FVar(1);
+    pub(crate) const LEVEL_S: Expr = Expr::FVar(2);
+    pub(crate) const LEVEL_MAX: Expr = Expr::FVar(3);
+    pub(crate) const LEVEL_IMAX: Expr = Expr::FVar(4);
+    pub(crate) const SORT: Expr = Expr::FVar(5);
+    use super::*;
+}
+use consts::*;
 
 impl State {
     pub fn new() -> Self {
         let defs = Vec::new();
         let mut this = State { defs };
-        this.add(SORT.app([LEVEL_S.app([LEVEL_Z])]), None);
-        this.add(LEVEL, None);
-        this.add(LEVEL.bind(Pi, LEVEL), None);
-        this.add(LEVEL.bind(Pi, LEVEL).bind(Pi, LEVEL), None);
-        this.add(LEVEL.bind(Pi, LEVEL).bind(Pi, LEVEL), None);
-        let sort = SORT.app([LEVEL_S.app([Expr::BVar(0)])]).bind(Pi, LEVEL);
-        this.add(sort, None);
+        this.add(SORT.app([LEVEL_S.app([LEVEL_Z])]));
+        this.add(LEVEL);
+        this.add(LEVEL.bind(Pi, LEVEL));
+        this.add(LEVEL.bind(Pi, LEVEL).bind(Pi, LEVEL));
+        this.add(LEVEL.bind(Pi, LEVEL).bind(Pi, LEVEL));
+        this.add(SORT.app([LEVEL_S.app([Expr::BVar(0)])]).bind(Pi, LEVEL));
         this
     }
-    pub fn add(&mut self, r#type: Expr, value: Option<Expr>) -> u32 {
-        self.defs.push((r#type, value));
+    pub fn add(&mut self, r#type: Expr) -> u32 {
+        self.defs.push(r#type);
         (self.defs.len() - 1).try_into().unwrap()
     }
-    pub fn type_check(&mut self, value: &Expr) -> Result<Expr, String> {
+    pub fn defs(&self) -> u32 {
+        self.defs.len() as u32
+    }
+    pub fn type_of(&mut self, value: &Expr) -> Result<Expr, String> {
         let st = self;
         let mut bvars = Vec::new();
         let bvars = Stack::new(&mut bvars);
         let depth = 0;
-        let mut cx = Context { st, bvars, depth };
-        type_of(&mut cx, value)
-    }
-    pub fn get(&self, fvar: u32) -> (&Expr, Option<&Expr>) {
-        let (r#type, value) = &self.defs[fvar as usize];
-        (r#type, value.as_ref())
+        type_of(&mut Context { st, bvars, depth }, value)
     }
 }
 
@@ -50,7 +51,7 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
     log::trace!("{:4} type_of({expr:?})", cx.depth);
     cx.depth += 1;
     let res = match expr {
-        &Expr::FVar(fvar) => cx.st.get(fvar).0.clone(),
+        &Expr::FVar(fvar) => cx.st.defs[fvar as usize].clone(),
         &Expr::BVar(n) => {
             let mut ty = cx.bvars[cx.bvars.len() - 1 - usize::from(n)].clone();
             (ty.raise(0, n + 1), ty).1
@@ -478,8 +479,8 @@ fn make_whnf(e: &mut Expr) -> Option<WhnfNext<'_>> {
                         Expr::IndConstr(_, mut ind) => ind.constrs.swap_remove(i as usize),
                         _ => unreachable!(),
                     };
-                    minor_premise_rec_args(base, &constr_type, max_d, 0, 0, constr);
-                    *e = take(constr);
+                    minor_premise_rec_args(base, &constr_type, max_d, 0, 0, arg);
+                    *e = take(arg);
                 }
                 WhnfNext::Ind(d, indices, constrs) => break WhnfNext::Ind(d - 1, indices, constrs),
             },

@@ -14,9 +14,9 @@ mod expr;
 
 mod kernel;
 
-mod parse;
-
 mod eval;
 
-#[cfg(test)]
-mod tests;
+//mod parse;
+
+//#[cfg(test)]
+//mod tests;

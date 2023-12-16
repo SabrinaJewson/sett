@@ -36,6 +36,12 @@ fn pass() {
             ∀ t: Ind (True: Sort Level:0, True),
             motive t,
         x) Ind:elim (True: Sort Level:0, True)",
+        "(λ x: Sort (Level:s Level:0), x)
+        (Sort (Ind:elim (True: Sort Level:0, True)
+            (Level:s Level:0)
+            (λ _: Ind (True: Sort Level:0, True), Level)
+            Level:0
+            (Ind:constr 0 (True: Sort Level:0, True))))",
         // Unit (universe-polymorphic)
         "λ u: Level, (λ x: Sort u, x) Ind (Unit: Sort u, Unit)",
         "λ u: Level, (λ x: Ind (Unit: Sort u, Unit), x) Ind:constr 0 (Unit: Sort u, Unit)",
@@ -45,6 +51,12 @@ fn pass() {
             ∀ t: Ind (Unit: Sort u, Unit),
             motive t,
         x) Ind:elim (Unit: Sort u, Unit)",
+        "λ u: Level, (λ x: Sort (Level:s Level:0), x)
+        (Sort (Ind:elim (Unit: Sort u, Unit)
+            (Level:s Level:0)
+            (λ _: Ind (Unit: Sort u, Unit), Level)
+            Level:0
+            (Ind:constr 0 (Unit: Sort u, Unit))))",
         // Bool
         "(λ x: Sort (Level:s Level:0), x) Ind (Bool: Sort (Level:s Level:0), Bool, Bool)",
         "(λ x: Ind (Bool: Sort (Level:s Level:0), Bool, Bool), x)
@@ -58,6 +70,14 @@ fn pass() {
             ∀ b: Ind (Bool: Sort (Level:s Level:0), Bool, Bool),
             motive b,
         x) Ind:elim (Bool: Sort (Level:s Level:0), Bool, Bool)",
+        "(λ x: Sort (Level:s Level:0), x) (Sort (Ind:elim (Bool: Sort (Level:s Level:0), Bool, Bool)
+            (Level:s Level:0) (λ _: Ind (Bool: Sort (Level:s Level:0), Bool, Bool), Level)
+            (Level:0) (Level:s Level:0)
+            Ind:constr 0 (Bool: Sort (Level:s Level:0), Bool, Bool)))",
+        "(λ x: Sort (Level:s Level:0), x) (Sort (Ind:elim (Bool: Sort (Level:s Level:0), Bool, Bool)
+            (Level:s Level:0) (λ _: Ind (Bool: Sort (Level:s Level:0), Bool, Bool), Level)
+            (Level:s Level:0) (Level:0)
+            Ind:constr 1 (Bool: Sort (Level:s Level:0), Bool, Bool)))",
         // Simple indexed type living in `Prop`
         "(λ x: ∀ α: Sort (Level:s Level:0), Sort Level:0, x)
             Ind (T: ∀ α: Sort (Level:s Level:0), Sort Level:0, T (Sort Level:0))",
@@ -97,14 +117,30 @@ fn pass() {
             Ind (Equiv: Sort (Level:max u v), ∀ to: ∀ a: α, β, ∀ of: ∀ b: β, α,
                 ∀ of_to: ∀ a: α, Eq u α (of (to a)) a,
                 ∀ to_of: ∀ b: β, Eq v β (to (of b)) b, Equiv)",
+        // Recursive application of recursor
+        "(
+        λ ℕ: Sort (Level:s Level:0), λ 0: ℕ, λ s: (∀ n: ℕ, ℕ),
+        λ rec: (∀ u: Level, ∀ motive: (∀ n: ℕ, Sort u),
+            ∀ c₀: motive 0,
+            ∀ cₛ: (∀ n: ℕ, ∀ ih: motive n, motive (s n)),
+            ∀ t: ℕ, motive t),
+        λ _: Sort (Level:s
+            (rec (Level:s Level:0) (λ _: ℕ, Level) Level:0 (λ _: ℕ, Level:s) (s (s (s (s (s 0))))))),
+        ℕ)
+        Ind (ℕ: Sort (Level:s Level:0), ℕ, ∀ n: ℕ, ℕ)
+        Ind:constr 0 (ℕ: Sort (Level:s Level:0), ℕ, ∀ n: ℕ, ℕ)
+        Ind:constr 1 (ℕ: Sort (Level:s Level:0), ℕ, ∀ n: ℕ, ℕ)
+        Ind:elim (ℕ: Sort (Level:s Level:0), ℕ, ∀ n: ℕ, ℕ)
+        (Sort (Level:s (Level:s (Level:s (Level:s (Level:s Level:0))))))",
         // A very complex artificial inductive type.
         "λ Bool: Sort (Level:s Level:0), λ false: Bool, λ true: Bool,
         λ ℕ: Sort (Level:s Level:0), λ 0: ℕ, λ 1: ℕ, λ 2: ℕ, λ Unit: Sort (Level:s Level:0),
+        λ bool_to_level: (∀ _: Bool, Level), λ sorry: (∀ u: Level, ∀ α: Sort u, α),
         (λ T: (∀ x: Bool, ∀ y: ℕ, Sort (Level:s Level:0)),
         λ T:c₀: (∀ a: (∀ p: Bool, T p 0), ∀ b: T true 1, ∀ c: Bool, ∀ d: (∀ p: ℕ, ∀ q: Unit, T c 1),
             T false 0),
         λ T:c₁: T false 2,
-        λ x: (∀ u: Level,
+        λ T:rec: (∀ u: Level,
             ∀ motive: (∀ x: Bool, ∀ y: ℕ, ∀ t: T x y, Sort u),
             ∀ c₀: (
                 ∀ a: (∀ p: Bool, T p 0),
@@ -116,7 +152,36 @@ fn pass() {
                 ∀ d_rec: (∀ p: ℕ, ∀ q: Unit, motive c 1 (d p q)),
                 motive false 0 (T:c₀ a b c d)),
             ∀ c₁: motive false 2 T:c₁,
-            ∀ x: Bool, ∀ y: ℕ, ∀ t: T x y, motive x y t), x)
+            ∀ x: Bool, ∀ y: ℕ, ∀ t: T x y, motive x y t),
+        λ x: Sort (Level:s (
+            T:rec (Level:s Level:0) (λ x: Bool, λ y: ℕ, λ t: T x y, Level)
+                (λ a: (∀ p: Bool, T p 0),
+                    λ b: T true 1,
+                    λ c: Bool,
+                    λ d: (∀ p: ℕ, ∀ q: Unit, T c 1),
+                    λ a_rec: (∀ p: Bool, Level),
+                    λ b_rec: Level,
+                    λ d_rec: (∀ p: ℕ, ∀ q: Unit, Level),
+                    bool_to_level c)
+                (Level:s Level:0)
+                false 0 (T:c₀
+                    (λ p: Bool, sorry (Level:s Level:0) (T p 0))
+                    (sorry (Level:s Level:0) (T true 1))
+                    false
+                    (λ p: ℕ, λ q: Unit, sorry (Level:s Level:0) (T false 1))))),
+        λ x: Sort (Level:s (
+            T:rec (Level:s Level:0) (λ x: Bool, λ y: ℕ, λ t: T x y, Level)
+                (λ a: (∀ p: Bool, T p 0),
+                    λ b: T true 1,
+                    λ c: Bool,
+                    λ d: (∀ p: ℕ, ∀ q: Unit, T c 1),
+                    λ a_rec: (∀ p: Bool, Level),
+                    λ b_rec: Level,
+                    λ d_rec: (∀ p: ℕ, ∀ q: Unit, Level),
+                    Level:s Level:0)
+                (Level:0)
+                false 2 T:c₁)),
+        0)
         Ind (T: ∀ x: Bool, ∀ y: ℕ, Sort (Level:s Level:0),
             ∀ a: (∀ p: Bool, T p 0), ∀ b: T true 1, ∀ c: Bool, ∀ d: (∀ p: ℕ, ∀ q: Unit, T c 1),
                 T false 0,
@@ -132,7 +197,32 @@ fn pass() {
         Ind:elim (T: ∀ x: Bool, ∀ y: ℕ, Sort (Level:s Level:0),
             ∀ a: (∀ p: Bool, T p 0), ∀ b: T true 1, ∀ c: Bool, ∀ d: (∀ p: ℕ, ∀ q: Unit, T c 1),
                 T false 0,
-            T false 2)",
+            T false 2)
+        (Sort (bool_to_level false))
+        Level",
+        // Small elimination
+        "λ u: Level, λ α: Sort u, (
+        λ Nonempty: Sort Level:0,
+        λ intro: (∀ a: α, Nonempty),
+        λ elim: (
+            ∀ motive: (∀ h: Nonempty, Sort Level:0),
+            ∀ h: (∀ a: α, motive (intro a)),
+            ∀ t: Nonempty, motive t), u)
+        Ind (small, Nonempty: Sort Level:0, ∀ a: α, Nonempty)
+        Ind:constr 0 (small, Nonempty: Sort Level:0, ∀ a: α, Nonempty)
+        Ind:elim (small, Nonempty: Sort Level:0, ∀ a: α, Nonempty)",
+        "λ P: Sort Level:0, λ Q: Sort Level:0, (
+        λ Or: Sort Level:0,
+        λ a: (∀ h: P, Or), λ b: (∀ h: Q, Or),
+        λ elim: (
+            ∀ motive: (∀ h: Or, Sort Level:0),
+            ∀ ha: (∀ h: P, motive (a h)),
+            ∀ hb: (∀ h: Q, motive (b h)),
+            ∀ t: Or, motive t), P)
+        Ind (small, Or: Sort Level:0, ∀ h: P, Or, ∀ h: Q, Or)
+        Ind:constr 0 (small, Or: Sort Level:0, ∀ h: P, Or, ∀ h: Q, Or)
+        Ind:constr 1 (small, Or: Sort Level:0, ∀ h: P, Or, ∀ h: Q, Or)
+        Ind:elim (small, Or: Sort Level:0, ∀ h: P, Or, ∀ h: Q, Or)",
     ];
 }
 

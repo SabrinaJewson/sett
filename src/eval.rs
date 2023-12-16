@@ -1,32 +1,36 @@
 pub(crate) struct State {
-    parse: parse::State<'static>,
-    meta_m_unit: Expr,
+    kernel: kernel::State,
+    defs: Vec<Option<fn()>>,
+    jit: JitModule,
+    functions: cranelift_frontend::FunctionBuilderContext,
 }
 
 impl State {
     pub fn new() -> Self {
-        let mut parse = parse::State::new();
-        let builtins = &[(
-            "MetaM",
-            "∀ α: Sort (Level:s Level:0), Sort (Level:s Level:0)",
-        )];
-        for (name, r#type) in builtins {
-            let r#type = parse.whole_expr(r#type).unwrap();
-            let n = parse.kernel.add(r#type, None);
-            parse.alias(name, Expr::FVar(n)).unwrap();
+        let kernel = kernel::State::new();
+        let jit = JitBuilder::new(cranelift_module::default_libcall_names()).unwrap();
+        Self {
+            defs: vec![None; kernel.defs() as usize],
+            kernel: kernel::State::new(),
+            jit: JitModule::new(jit),
+            functions: cranelift_frontend::FunctionBuilderContext::new(),
         }
-        parse.parse(PRELUDE).expect("invalid prelude");
-        let meta_m_unit = parse
-            .whole_expr("MetaM (PUnit (Sort (Level:s Level:0)))")
-            .unwrap();
-        Self { parse, meta_m_unit }
     }
-    pub fn eval(&mut self, s: &str) -> Result<(), String> {
-        let e = self.parse.whole_expr(s)?;
-        let e = Expr::BVar(0).bind(Lam, self.meta_m_unit.clone()).app([e]);
-        self.parse.kernel.type_check(&e).unwrap();
-        Ok(())
+    pub fn eval(&mut self, e: &Expr) -> Result<(), String> {
+        todo!()
     }
+}
+
+// optimizations:
+// - parameter removal
+// - parameter coalescing
+
+fn compile(s: &mut State, e: &Expr) -> Result<*mut u8, String> {
+    let mut f = cranelift_codegen::ir::Function::new();
+    let mut f = cranelift_frontend::FunctionBuilder::new(&mut f, &mut s.functions);
+    let pointer = s.jit.isa().pointer_type();
+
+    todo!()
 }
 
 const PRELUDE: &str = "
@@ -69,4 +73,9 @@ const PRELUDE: &str = "
 
 use crate::expr::Bind::*;
 use crate::expr::Expr;
+use crate::kernel;
+use crate::kernel::consts::*;
 use crate::parse;
+use cranelift_jit::JITBuilder as JitBuilder;
+use cranelift_jit::JITModule as JitModule;
+use cranelift_module::Module as _;

@@ -66,7 +66,7 @@ impl<'s> State<'s> {
         Ok(e)
     }
     pub fn type_check(&mut self, expr: &Expr) -> Result<Expr, String> {
-        if kernel::logging_enabled() {
+        if cfg!(test) || kernel::logging_enabled() {
             let mut names = vec![String::new(); self.defs.len()];
             for (k, v) in &self.defs {
                 match v {
