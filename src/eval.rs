@@ -1,6 +1,6 @@
 pub(crate) struct State {
     kernel: kernel::State,
-    defs: Vec<Option<fn()>>,
+    defs: Vec<Option<LowExpr>>,
     jit: JitModule,
     functions: cranelift_frontend::FunctionBuilderContext,
 }
@@ -21,9 +21,36 @@ impl State {
     }
 }
 
-// optimizations:
-// - parameter removal
-// - parameter coalescing
+#[derive(Clone, Copy)]
+struct Value([*mut (); 2]);
+
+impl Default for Value {
+    fn default() -> Self {
+        Self([ptr::null_mut(); 2])
+    }
+}
+
+#[derive(Clone)]
+enum LowExpr {
+    Lit(Value),
+    BVar(u16),
+    Lam(usize, Vec<LowExpr>),
+    App(Box<LowExpr>, Vec<LowExpr>),
+    // TODO: Optimize out constant arguments?
+    Constr(u16, Vec<LowExpr>),
+    Elim(Vec<LowExpr>, Box<LowExpr>),
+}
+
+fn lower(st: &State, e: &Expr) -> Result<LowExpr, String> {
+    Ok(match e {
+        &Expr::FVar(v) => st.defs[v as usize].ok_or("noncomputable")?.clone(),
+        &Expr::BVar(v) => LowExpr::BVar(v),
+        Expr::Lam(_, body) => LowExpr::Lam(1, vec![lower(st, body)?]),
+        Expr::App(l, r) => LowExpr::App(Box::new(lower(st, l)?), vec![lower(st, r)?]),
+        Expr::IndConstr(n, i) if i.sm => todo!(),
+        Expr::Sortω(_) | Expr::Pi(_, _) | Expr::Ind(_) => LowExpr::Lit(Value::default()),
+    })
+}
 
 fn compile(s: &mut State, e: &Expr) -> Result<*mut u8, String> {
     let mut f = cranelift_codegen::ir::Function::new();
@@ -71,11 +98,9 @@ const PRELUDE: &str = "
 ";
     */
 
-use crate::expr::Bind::*;
 use crate::expr::Expr;
 use crate::kernel;
-use crate::kernel::consts::*;
-//use crate::parse;
 use cranelift_jit::JITBuilder as JitBuilder;
 use cranelift_jit::JITModule as JitModule;
 use cranelift_module::Module as _;
+use std::ptr;

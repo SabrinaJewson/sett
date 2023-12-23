@@ -128,8 +128,8 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
 
 fn ind_check(cx: &mut Context<'_>, ind: &Ind) -> Result<(), String> {
     let mut base_level = arity(cx, &ind.arity, 0)?;
-    let level_kind = level::kind(cx, &mut base_level).ok_or("invalid level for inductive type")?;
-    if ind.sm && !matches!(level_kind, level::Kind::AlwaysZero) {
+    let level_kind = level_kind(&mut base_level);
+    if ind.sm && level_kind != LevelKind::AlwaysZero {
         return Err("small elimination allowed for inductive propositions only".to_owned());
     }
 
@@ -143,8 +143,8 @@ fn ind_check(cx: &mut Context<'_>, ind: &Ind) -> Result<(), String> {
 
             let (resultant_type, max_d) = constr(c, 0)?;
             match level_kind {
-                level::Kind::AlwaysZero if ind.sm => {}
-                level::Kind::AlwaysNonzero => {}
+                LevelKind::AlwaysZero if ind.sm => {}
+                LevelKind::AlwaysNonzero => {}
                 _ if 1 < ind.constrs.len() => return Err(">1 constructor".to_owned()),
                 _ => {
                     let mut level = univ.into_level().unwrap();
@@ -336,35 +336,6 @@ mod level {
             || e.is_app(&LEVEL_S)
             || matches!(e, Expr::App(e, _) if e.is_app(&LEVEL_MAX) || e.is_app(&LEVEL_IMAX))
     }
-    pub(super) enum Kind {
-        AlwaysZero,
-        SometimesZero,
-        AlwaysNonzero,
-    }
-    pub(super) fn kind(cx: &mut Context<'_>, e: &mut Expr) -> Option<Kind> {
-        match e {
-            &mut LEVEL_Z => return Some(Kind::AlwaysZero),
-            Expr::App(f, _) if **f == LEVEL_S => return Some(Kind::AlwaysNonzero),
-            Expr::BVar(_) => return Some(Kind::SometimesZero),
-            _ => {}
-        }
-
-        let exprs = Vec::new();
-        let mut vars = Vars { cx, exprs };
-        let mut n = Normalized::default();
-        max(&mut n, &*term(&mut vars, e).ok()?).ok()?;
-        let mut possible = [false; 2];
-        for s in 0..(1 << vars.exprs.len()) {
-            let (k, vals) = apply(&n, vars.exprs.len() as u8, s)?;
-            possible[(k != 0 || vals.iter().any(|v| *v != 0)) as usize] = true;
-        }
-        Some(match possible {
-            [true, false] => Kind::AlwaysZero,
-            [true, true] => Kind::SometimesZero,
-            [false, true] => Kind::AlwaysNonzero,
-            [false, false] => unreachable!(),
-        })
-    }
     enum Term {
         Var(u8),
         Zero,
@@ -451,6 +422,25 @@ mod level {
     }
 
     use super::*;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum LevelKind {
+    AlwaysZero,
+    SometimesZero,
+    AlwaysNonzero,
+}
+pub(crate) fn level_kind(e: &mut Expr) -> LevelKind {
+    make_whnf(e);
+    match e {
+        &mut LEVEL_Z => LevelKind::AlwaysZero,
+        Expr::App(f, _) if **f == LEVEL_S => LevelKind::AlwaysNonzero,
+        Expr::App(f, b) if f.is_app(&LEVEL_MAX) => {
+            Ord::max(level_kind(f.unwrap_app().1), level_kind(b))
+        }
+        Expr::App(f, b) if f.is_app(&LEVEL_IMAX) => level_kind(b),
+        _ => LevelKind::SometimesZero,
+    }
 }
 
 enum WhnfNext<'e> {

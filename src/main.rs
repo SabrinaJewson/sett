@@ -14,7 +14,7 @@ mod expr;
 
 mod kernel;
 
-// mod eval;
+mod eval;
 
 //mod parse;
 
