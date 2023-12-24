@@ -1,57 +1,67 @@
 pub(crate) struct State {
-    defs: Vec<Expr>,
+    defs: Vec<(String, Expr)>,
 }
 
-pub(crate) mod consts {
+pub(crate) mod builtins {
     pub(crate) const LEVEL: Expr = Expr::FVar(0);
     pub(crate) const LEVEL_Z: Expr = Expr::FVar(1);
     pub(crate) const LEVEL_S: Expr = Expr::FVar(2);
     pub(crate) const LEVEL_MAX: Expr = Expr::FVar(3);
     pub(crate) const LEVEL_IMAX: Expr = Expr::FVar(4);
     pub(crate) const SORT: Expr = Expr::FVar(5);
+    pub(crate) const BUILTINS: usize = 6;
     use super::*;
 }
-use consts::*;
+use builtins::*;
 
 impl State {
-    pub fn new() -> Self {
-        let defs = Vec::new();
-        let mut this = State { defs };
-        this.add(SORT.app([LEVEL_S.app([LEVEL_Z])]));
-        this.add(LEVEL);
-        this.add(LEVEL.pi(LEVEL));
-        this.add(LEVEL.pi(LEVEL).pi(LEVEL));
-        this.add(LEVEL.pi(LEVEL).pi(LEVEL));
-        this.add(SORT.app([LEVEL_S.app([Expr::BVar(0)])]).pi(LEVEL));
-        this
+    pub fn new(builtin_names: [&str; BUILTINS]) -> Self {
+        let builtin_types: [Expr; BUILTINS] = [
+            SORT.app([LEVEL_S.app([LEVEL_Z])]),
+            LEVEL,
+            LEVEL.pi(LEVEL),
+            LEVEL.pi(LEVEL).pi(LEVEL),
+            LEVEL.pi(LEVEL).pi(LEVEL),
+            SORT.app([LEVEL_S.app([Expr::BVar(0)])]).pi(LEVEL),
+        ];
+        let builtin_names = builtin_names.into_iter().map(str::to_owned);
+        let defs = builtin_names.zip(builtin_types).collect();
+        State { defs }
     }
-    pub fn add(&mut self, r#type: Expr) -> u32 {
-        self.defs.push(r#type);
+    pub fn add(&mut self, name: &str, r#type: Expr) -> u32 {
+        self.defs.push((name.to_owned(), r#type));
         (self.defs.len() - 1).try_into().unwrap()
     }
-    pub fn defs(&self) -> u32 {
-        self.defs.len() as u32
+    pub fn truncate(&mut self, len: u32) -> Result<(), String> {
+        if len <= 5 {
+            return Err("cannot truncate past constants".to_owned());
+        }
+        self.defs.truncate(len as usize);
+        Ok(())
     }
     pub fn type_of(&mut self, value: &Expr) -> Result<Expr, String> {
         let st = self;
         let mut bvars = Vec::new();
         let bvars = Stack::new(&mut bvars);
-        let depth = 0;
+        let depth = &mut 0;
         type_of(&mut Context { st, bvars, depth }, value)
+    }
+    pub fn name_of(&self, fvar: u32) -> &str {
+        &self.defs[fvar as usize].0
     }
 }
 
 struct Context<'a> {
     st: &'a mut State,
     bvars: Stack<'a, &'a Expr>,
-    depth: u32,
+    depth: &'a mut u32,
 }
 
 fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
-    log::trace!("{:4} type_of({expr:?})", cx.depth);
-    cx.depth += 1;
+    log::trace!("{:4} type_of({})", cx.display(expr), cx.depth);
+    *cx.depth += 1;
     let res = match expr {
-        &Expr::FVar(fvar) => cx.st.defs[fvar as usize].clone(),
+        &Expr::FVar(fvar) => cx.st.defs[fvar as usize].1.clone(),
         &Expr::BVar(n) => {
             let mut ty = cx.bvars[cx.bvars.len() - 1 - usize::from(n)].clone();
             (ty.raise(0, n + 1), ty).1
@@ -59,7 +69,7 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
         Expr::Sortω(l) => Expr::Sortω(l.checked_add(1).ok_or("levelω overflow")?),
         Expr::Lam(l, r) => bind(cx, l, |cx, _| Ok(type_of(cx, r)?.pi(l.clone())))?,
         Expr::Pi(l, r) => bind(cx, l, |cx, l_univ| {
-            Ok(match (l_univ, type_of(cx, r)?.expect_univ()?) {
+            Ok(match (l_univ, type_of(cx, r)?.expect_univ(cx)?) {
                 (Univ::Sort(l), Univ::Sort(mut r)) => match r.lower(0, 1) {
                     Ok(()) => SORT.app([LEVEL_IMAX.app([l, r])]),
                     Err(()) => Expr::Sortω(0),
@@ -75,7 +85,10 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
                 ensure_def_eq(cx, &mut f_in, &mut r_type)?;
                 (f_out.subst(r), *f_out).1
             }
-            t => return Err(format!("application LHS `{l:?} : {t:?}` not Π type")),
+            t => {
+                let (l, t) = (cx.display(l), cx.display(&t));
+                return Err(format!("application LHS `{l} : {t}` not Π type"));
+            }
         },
         Expr::Ind(i) => (ind_check(cx, i)?, i.arity.clone()).1,
         &Expr::IndConstr(n, ref i) => {
@@ -121,8 +134,8 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
             t
         }
     };
-    cx.depth -= 1;
-    log::trace!("{:4} type_of result: {res:?}", cx.depth);
+    *cx.depth -= 1;
+    log::trace!("{:4} type_of result: {}", cx.depth, cx.display(&res));
     Ok(res)
 }
 
@@ -141,7 +154,7 @@ fn ind_check(cx: &mut Context<'_>, ind: &Ind) -> Result<(), String> {
             let mut univ = type_of(cx, c)?;
             ensure_def_eq(cx, &mut base_univ, &mut univ)?;
 
-            let (resultant_type, max_d) = constr(c, 0)?;
+            let (resultant_type, max_d) = constr(cx, c, 0)?;
             match level_kind {
                 LevelKind::AlwaysZero if ind.sm => {}
                 LevelKind::AlwaysNonzero => {}
@@ -230,7 +243,7 @@ fn arity(cx: &mut Context<'_>, a: &Expr, d: u16) -> Result<Expr, String> {
     } else if let Expr::Pi(l, r) = a {
         bind(cx, l, |cx, _| arity(cx, r, d + 1))
     } else {
-        Err(format!("{a:?} not a valid arity"))
+        Err(format!("{} not a valid arity", cx.display(a)))
     }
 }
 
@@ -238,8 +251,8 @@ fn bind<R, F>(cx: &mut Context<'_>, expr: &Expr, f: F) -> Result<R, String>
 where
     F: FnOnce(&mut Context<'_>, Univ) -> Result<R, String>,
 {
-    let univ = type_of(cx, expr)?.expect_univ()?;
-    let (st, depth) = (&mut *cx.st, cx.depth);
+    let univ = type_of(cx, expr)?.expect_univ(cx)?;
+    let (st, depth) = (&mut *cx.st, &mut *cx.depth);
     cx.bvars.reborrow().with(expr, move |bvars| {
         let mut cx = Context { st, bvars, depth };
         f(&mut cx, univ)
@@ -248,16 +261,16 @@ where
 
 fn ensure_def_eq(cx: &mut Context<'_>, lhs: &mut Expr, rhs: &mut Expr) -> Result<(), String> {
     if !def_eq(cx, lhs, rhs) {
-        return Err(format!(
-            "type mismatch:\nexpected {lhs:?}\n   found {rhs:?}"
-        ));
+        let (l, r) = (cx.display(lhs), cx.display(rhs));
+        return Err(format!("type mismatch:\nexpected {l}\n   found {r}"));
     }
     Ok(())
 }
 
 fn def_eq(cx: &mut Context<'_>, lhs: &mut Expr, rhs: &mut Expr) -> bool {
-    log::trace!("{:4} def_eq({lhs:?}, {rhs:?})", cx.depth);
-    cx.depth += 1;
+    let (l, r) = (cx.display(lhs), cx.display(rhs));
+    log::trace!("{:4} def_eq({l}, {r})", cx.depth);
+    *cx.depth += 1;
 
     make_whnf(lhs);
     make_whnf(rhs);
@@ -280,7 +293,7 @@ fn def_eq(cx: &mut Context<'_>, lhs: &mut Expr, rhs: &mut Expr) -> bool {
     }) || level::def_eq(cx, lhs, rhs).unwrap_or(false)
         || uip(cx, lhs, rhs);
 
-    cx.depth -= 1;
+    *cx.depth -= 1;
     log::trace!("{:4} def_eq result: {r}", cx.depth);
 
     r
@@ -324,8 +337,8 @@ mod level {
         max(&mut r, &rhs_term)?;
 
         let vars = vars.exprs.len() as u8;
-        log::trace!("{lhs:?} → {l:?}");
-        log::trace!("{rhs:?} → {r:?}");
+        log::trace!("{} → {l:?}", cx.display(lhs));
+        log::trace!("{} → {r:?}", cx.display(rhs));
         let eq = (0..(1_u16 << vars))
             .all(|s| apply(&l, vars, s).is_some_and(|l| Some(l) == apply(&r, vars, s)));
         log::trace!("result: {eq}");
@@ -519,36 +532,39 @@ fn singleton(cx: &mut Context<'_>, res: &Expr, c: &Expr, d: u16, max_d: u16, lev
     }
 }
 
-fn constr(c: &Expr, d: u16) -> Result<(&Expr, u16), String> {
+fn constr<'c>(cx: &Context<'_>, c: &'c Expr, d: u16) -> Result<(&'c Expr, u16), String> {
     Ok(match c {
         &Expr::BVar(v) if v == d => (c, d),
         Expr::App(_, r) if r.has_bvar(d) => return Err("invalid constructor".to_owned()),
-        Expr::App(l, _) => (constr(l, d)?, (c, d)).1,
+        Expr::App(l, _) => (constr(cx, l, d)?, (c, d)).1,
         Expr::Pi(l, r) => {
             let msg = "depended-on parameter cannot reference type";
             match l.has_bvar(d) {
                 true if r.has_bvar(0) => return Err(msg.to_owned()),
-                true => strict_positive(l, d)?,
+                true => strict_positive(cx, l, d)?,
                 false => {}
             }
-            constr(r, d + 1)?
+            constr(cx, r, d + 1)?
         }
-        _ => return Err(format!("invalid expression in constructor: `{c:?}`")),
+        _ => {
+            let c = cx.display(c);
+            return Err(format!("invalid expression in constructor: `{c}`"));
+        }
     })
 }
 
-fn strict_positive(e: &Expr, depth: u16) -> Result<(), String> {
+fn strict_positive(cx: &Context<'_>, e: &Expr, depth: u16) -> Result<(), String> {
     match e {
         &Expr::BVar(v) if v == depth => Ok(()),
         Expr::App(_, r) if r.has_bvar(depth) => Err("not strict positive".to_owned()),
-        Expr::App(l, _) => strict_positive(l, depth),
+        Expr::App(l, _) => strict_positive(cx, l, depth),
         Expr::Pi(l, r) => {
             if l.has_bvar(depth) {
                 return Err("not strict positive".to_owned());
             }
-            strict_positive(r, depth + 1)
+            strict_positive(cx, r, depth + 1)
         }
-        _ => Err(format!("not strict positive: `{e:?}`")),
+        _ => Err(format!("not strict positive: `{}`", cx.display(e))),
     }
 }
 
@@ -593,34 +609,34 @@ impl Expr {
         })
     }
 
-    pub fn into_univ(self) -> Result<Univ, Self> {
+    fn into_univ(self) -> Result<Univ, Self> {
         Ok(match self {
             Expr::App(l, r) if *l == SORT => Univ::Sort(r),
             Expr::Sortω(n) => Univ::Sortω(n),
             _ => return Err(self),
         })
     }
-    pub fn into_level(self) -> Result<Expr, Self> {
+    fn into_level(self) -> Result<Expr, Self> {
         match self {
             Expr::App(l, r) if *l == SORT => Ok(*r),
             _ => Err(self),
         }
     }
-    pub fn as_level(&self) -> Option<&Expr> {
+    fn as_level(&self) -> Option<&Expr> {
         Some(match self {
             Expr::App(l, r) if **l == SORT => r,
             _ => return None,
         })
     }
-    pub fn as_level_mut(&mut self) -> Option<&mut Expr> {
+    fn as_level_mut(&mut self) -> Option<&mut Expr> {
         Some(match self {
             Expr::App(l, r) if **l == SORT => r,
             _ => return None,
         })
     }
-    pub fn expect_univ(self) -> Result<Univ, String> {
+    fn expect_univ(self, cx: &Context<'_>) -> Result<Univ, String> {
         self.into_univ()
-            .map_err(|e| format!("expression `{e:?}` not a sort"))
+            .map_err(|e| format!("expression `{}` not a sort", cx.display(&e)))
     }
 }
 #[derive(Debug)]
@@ -637,13 +653,78 @@ impl Univ {
     }
 }
 
-pub(crate) fn logging_enabled() -> bool {
-    log::log_enabled!(log::Level::Trace)
+impl<'c> Context<'c> {
+    fn display<'a>(&'a self, e: &'a Expr) -> DisplayExpr<'a, 'c> {
+        DisplayExpr(self, e)
+    }
+}
+
+struct DisplayExpr<'a, 'c>(&'a Context<'c>, &'a Expr);
+impl Display for DisplayExpr<'_, '_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self.1 {
+            &Expr::FVar(n) => f.write_str(self.0.st.name_of(n)),
+            Expr::BVar(n) => write!(f, "_{n}"),
+            Expr::Sortω(n) => write!(f, "Sortω{}", Sub(*n)),
+            Expr::Lam(l, r) | Expr::Pi(l, r) => {
+                let (l_, r) = (Self(self.0, l), Self(self.0, r));
+                let s = match &self.1 {
+                    Expr::Lam(..) => "λ",
+                    _ => "∀",
+                };
+                match &**l {
+                    Expr::Pi(..) | Expr::App(..) => write!(f, "{s} _: ({l_}), {r}"),
+                    _ => write!(f, "{s} _: {l_}, {r}"),
+                }
+            }
+            Expr::App(l, r) => {
+                match &**l {
+                    Expr::Lam(..) => write!(f, "({}) ", Self(self.0, l))?,
+                    _ => write!(f, "{} ", Self(self.0, l))?,
+                }
+                match &**r {
+                    Expr::App(..) => write!(f, "({})", Self(self.0, r)),
+                    _ => write!(f, "{}", Self(self.0, r)),
+                }
+            }
+            Expr::Ind(i) => write!(f, "Ind{}", DisplayInd(self.0, i)),
+            Expr::IndConstr(n, i) => write!(f, "Ind:constr{}{}", Sub(*n), DisplayInd(self.0, i)),
+            Expr::IndElim(i) => write!(f, "Ind:elim{}", DisplayInd(self.0, i)),
+        }
+    }
+}
+
+struct DisplayInd<'a, 'c>(&'a Context<'c>, &'a Ind);
+impl Display for DisplayInd<'_, '_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self.1.sm {
+            false => write!(f, "(_: {}", DisplayExpr(self.0, &self.1.arity))?,
+            true => write!(f, "(small, _: {}", DisplayExpr(self.0, &self.1.arity))?,
+        }
+        for c in &self.1.constrs {
+            write!(f, ", {}", DisplayExpr(self.0, c))?;
+        }
+        f.write_str(")")
+    }
+}
+
+struct Sub(u16);
+impl Display for Sub {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        if self.0 != 0 {
+            Display::fmt(&Self(self.0 / 10), f)?;
+            write!(f, "{}", self.0 % 10)?;
+        }
+        Ok(())
+    }
 }
 
 use crate::expr::Expr;
 use crate::expr::Ind;
 use crate::stack::Stack;
 use std::cmp;
+use std::fmt;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::mem::replace;
 use std::mem::take;

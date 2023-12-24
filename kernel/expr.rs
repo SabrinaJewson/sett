@@ -1,4 +1,4 @@
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Expr {
     FVar(u32),
     BVar(u16),
@@ -17,62 +17,11 @@ impl Default for Expr {
     }
 }
 
-thread_local! {
-    pub(crate) static FVAR_NAMES: RefCell<Option<Vec<String>>> = RefCell::new(None);
-}
-
-impl Debug for Expr {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            &Self::FVar(n) => FVAR_NAMES.with_borrow(|fvars| match fvars {
-                Some(fvars) => write!(f, "{}", fvars[n as usize]),
-                None => write!(f, "{n}"),
-            }),
-            Self::BVar(n) => write!(f, "_{n}"),
-            Self::Sortω(n) => write!(f, "Sortω {n}"),
-            Self::Lam(l, r) => match &**l {
-                Self::Pi(_, _) | Self::App(_, _) => write!(f, "λ _: ({l:?}), {r:?}"),
-                _ => write!(f, "λ _: {l:?}, {r:?}"),
-            },
-            Self::Pi(l, r) => match &**l {
-                Self::Pi(_, _) | Self::App(_, _) => write!(f, "∀ _: ({l:?}), {r:?}"),
-                _ => write!(f, "∀ _: {l:?}, {r:?}"),
-            },
-            Self::App(l, r) => {
-                match &**l {
-                    Self::Lam(_, _) => write!(f, "({l:?}) ")?,
-                    _ => write!(f, "{l:?} ")?,
-                }
-                match &**r {
-                    Self::App(_, _) => write!(f, "({r:?})"),
-                    _ => write!(f, "{r:?}"),
-                }
-            }
-            Self::Ind(i) => write!(f, "Ind {i:?}"),
-            Self::IndConstr(n, i) => write!(f, "Ind:constr {n} {i:?}"),
-            Self::IndElim(i) => write!(f, "Ind:elim {i:?}"),
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Ind {
     pub sm: bool,
     pub arity: Expr,
     pub constrs: Vec<Expr>,
-}
-
-impl Debug for Ind {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self.sm {
-            false => write!(f, "(_: {:?}", self.arity)?,
-            true => write!(f, "(small, _: {:?}", self.arity)?,
-        }
-        for c in &self.constrs {
-            write!(f, ", {c:?}")?;
-        }
-        f.write_str(")")
-    }
 }
 
 macro_rules! visit {
@@ -132,8 +81,4 @@ impl Expr {
     }
 }
 
-use std::cell::RefCell;
 use std::convert::Infallible;
-use std::fmt;
-use std::fmt::Debug;
-use std::fmt::Formatter;

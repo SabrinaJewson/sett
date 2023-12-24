@@ -1,0 +1,17 @@
+[package]
+name = "kernel-cli"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+env_logger = { version = "0.10.1", optional = true }
+kernel = { path = "../kernel" }
+log = { version = "0.4.20", optional = true }
+
+[features]
+log = ["dep:log", "dep:env_logger"]
+
+[[bin]]
+name = "kernel"
+path = "main.rs"
