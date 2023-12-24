@@ -77,7 +77,6 @@ version = "0.0.0"
 dependencies = [
  "env_logger",
  "kernel",
- "log",
 ]
 
 [[package]]
