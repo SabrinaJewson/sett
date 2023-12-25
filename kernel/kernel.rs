@@ -141,13 +141,12 @@ fn type_of(cx: &mut Context<'_>, expr: &Expr) -> Result<Expr, String> {
 }
 
 fn ind_check(cx: &mut Context<'_>, ind: &Ind) -> Result<(), String> {
-    let mut base_level = arity(cx, &ind.arity, 0)?;
-    let level_kind = level_kind(&mut base_level);
-    if ind.sm && level_kind != LevelKind::AlwaysZero {
+    let mut base_univ = arity(cx, &ind.arity, 0)?;
+    let univ_kind = univ_kind(&mut base_univ);
+    if ind.sm && univ_kind != UnivKind::AlwaysZero {
         return Err("small elimination allowed for inductive propositions only".to_owned());
     }
 
-    let mut base_univ = SORT.app([base_level]);
     base_univ.raise(0, 1);
     u16::try_from(ind.constrs.len()).map_err(|_| "too many constructors")?;
     bind(cx, &ind.arity, |cx, _| {
@@ -156,9 +155,9 @@ fn ind_check(cx: &mut Context<'_>, ind: &Ind) -> Result<(), String> {
             ensure_def_eq(cx, &mut base_univ, &mut univ)?;
 
             let (resultant_type, max_d) = constr(cx, c, 0)?;
-            match level_kind {
-                LevelKind::AlwaysZero if ind.sm => {}
-                LevelKind::AlwaysNonzero => {}
+            match univ_kind {
+                UnivKind::AlwaysZero if ind.sm => {}
+                UnivKind::AlwaysNonzero => {}
                 _ if 1 < ind.constrs.len() => return Err(">1 constructor".to_owned()),
                 _ => {
                     let mut level = univ.into_level().unwrap();
@@ -238,7 +237,7 @@ fn minor_premise_rec_args(base: &Expr, c: &Expr, max_d: u16, d: u16, rec: u16, r
 }
 
 fn arity(cx: &mut Context<'_>, a: &Expr, d: u16) -> Result<Expr, String> {
-    if let Some(mut e) = a.as_level().cloned() {
+    if let Some(mut e) = a.is_univ().then(|| a.clone()) {
         let msg = "universe level cannot depend on indices";
         (e.lower(0, d).map_err(|()| msg)?, Ok(e)).1
     } else if let Expr::Pi(l, r) = a {
@@ -439,21 +438,28 @@ mod level {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum LevelKind {
+enum UnivKind {
     AlwaysZero,
     SometimesZero,
     AlwaysNonzero,
 }
-pub(crate) fn level_kind(e: &mut Expr) -> LevelKind {
+fn univ_kind(e: &mut Expr) -> UnivKind {
+    match e {
+        Expr::App(l, r) if **l == SORT => level_kind(r),
+        Expr::Sortω(_) => UnivKind::AlwaysNonzero,
+        _ => unreachable!(),
+    }
+}
+fn level_kind(e: &mut Expr) -> UnivKind {
     make_whnf(e);
     match e {
-        &mut LEVEL_Z => LevelKind::AlwaysZero,
-        Expr::App(f, _) if **f == LEVEL_S => LevelKind::AlwaysNonzero,
+        &mut LEVEL_Z => UnivKind::AlwaysZero,
+        Expr::App(f, _) if **f == LEVEL_S => UnivKind::AlwaysNonzero,
         Expr::App(f, b) if f.is_app(&LEVEL_MAX) => {
             Ord::max(level_kind(f.unwrap_app().1), level_kind(b))
         }
         Expr::App(f, b) if f.is_app(&LEVEL_IMAX) => level_kind(b),
-        _ => LevelKind::SometimesZero,
+        _ => UnivKind::SometimesZero,
     }
 }
 
@@ -617,17 +623,14 @@ impl Expr {
             _ => return Err(self),
         })
     }
+    fn is_univ(&self) -> bool {
+        matches!(self, Self::App(l, _) if **l == SORT) || matches!(self, Self::Sortω(_))
+    }
     fn into_level(self) -> Result<Expr, Self> {
         match self {
             Expr::App(l, r) if *l == SORT => Ok(*r),
             _ => Err(self),
         }
-    }
-    fn as_level(&self) -> Option<&Expr> {
-        Some(match self {
-            Expr::App(l, r) if **l == SORT => r,
-            _ => return None,
-        })
     }
     fn as_level_mut(&mut self) -> Option<&mut Expr> {
         Some(match self {
@@ -641,12 +644,12 @@ impl Expr {
     }
 }
 #[derive(Debug)]
-pub(crate) enum Univ {
+enum Univ {
     Sort(Box<Expr>),
     Sortω(u16),
 }
 impl Univ {
-    pub fn into_level(self) -> Result<Expr, Self> {
+    fn into_level(self) -> Result<Expr, Self> {
         match self {
             Self::Sort(level) => Ok(*level),
             Univ::Sortω(_) => Err(self),

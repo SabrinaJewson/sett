@@ -1,7 +1,9 @@
 #![allow(clippy::read_zero_byte_vec)]
 
 fn main() -> process::ExitCode {
-    env_logger::builder().target(env_logger::Target::Stdout).init();
+    env_logger::builder()
+        .target(env_logger::Target::Stdout)
+        .init();
 
     match try_main() {
         Ok(()) => process::ExitCode::SUCCESS,
@@ -44,8 +46,8 @@ fn try_main() -> io::Result<()> {
     Ok(())
 }
 
-use std::process;
-use std::io;
 use std::env;
+use std::io;
 use std::io::Read as _;
+use std::process;
 use std::str;
