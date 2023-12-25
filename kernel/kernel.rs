@@ -1,5 +1,5 @@
 pub(crate) struct State {
-    defs: Vec<(String, Expr)>,
+    defs: Vec<(Rc<str>, Expr)>,
 }
 
 pub(crate) mod builtins {
@@ -24,13 +24,14 @@ impl State {
             LEVEL.pi(LEVEL).pi(LEVEL),
             SORT.app([LEVEL_S.app([Expr::BVar(0)])]).pi(LEVEL),
         ];
-        let builtin_names = builtin_names.into_iter().map(str::to_owned);
+        let builtin_names = builtin_names.into_iter().map(<Rc<str>>::from);
         let defs = builtin_names.zip(builtin_types).collect();
         State { defs }
     }
-    pub fn add(&mut self, name: &str, r#type: Expr) -> u32 {
-        self.defs.push((name.to_owned(), r#type));
-        (self.defs.len() - 1).try_into().unwrap()
+    pub fn add(&mut self, name: &str, r#type: Expr) -> (Rc<str>, u32) {
+        let name = <Rc<str>>::from(name);
+        self.defs.push((name.clone(), r#type));
+        (name, (self.defs.len() - 1).try_into().unwrap())
     }
     pub fn truncate(&mut self, len: u32) -> Result<(), String> {
         if len <= 5 {
@@ -728,3 +729,4 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 use std::mem::replace;
 use std::mem::take;
+use std::rc::Rc;

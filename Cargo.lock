@@ -18,6 +18,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "327762f6e5a765692301e5bb513e0d9fef63be86bbc14528052b1cd3e6f03e07"
 
 [[package]]
+name = "elab"
+version = "0.0.0"
+dependencies = [
+ "kernel",
+]
+
+[[package]]
 name = "env_logger"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

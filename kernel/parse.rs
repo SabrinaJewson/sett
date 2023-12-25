@@ -1,11 +1,11 @@
 pub(crate) struct State {
     kernel: kernel::State,
-    defs: HashMap<String, u32>,
+    defs: HashMap<Rc<str>, u32>,
+    vals: Vec<Expr>,
 }
 
 impl State {
     pub fn new() -> Self {
-        let defs = HashMap::new();
         let builtins = [
             "Level",
             "Level:0",
@@ -15,59 +15,63 @@ impl State {
             "Sort",
         ];
         let kernel = kernel::State::new(builtins);
-        let mut this = Self { defs, kernel };
-        for (i, name) in builtins.iter().enumerate() {
-            this.def(name, i as u32).unwrap();
-        }
-        this
+        let defs = builtins.into_iter().enumerate();
+        let defs = defs.map(|(i, name)| (name.into(), i as u32)).collect();
+        let vals = (0..BUILTINS).map(|i| Expr::FVar(i as u32)).collect();
+        Self { kernel, defs, vals }
     }
     pub fn parse(&mut self, input: &str) -> Result<(), String> {
         let mut input = input.trim_start_matches(['\n', '\t', ' ']);
-        let mut transparent = Vec::new();
         while !input.is_empty() {
             if peek(input) == Some(["remove"]) {
                 exact_token(&mut input, "remove")?;
                 let n = fvar(&self.defs, token(&mut input).ok_or("unexpected EOF")?)?;
                 self.kernel.truncate(n)?;
+                self.vals.truncate(n as usize);
                 for i in n..self.defs.len() as u32 {
                     self.defs.remove(self.kernel.name_of(i));
                 }
                 continue;
             }
-            transparent.clear();
-            let transparent_start = self.defs.len() as u32;
-            loop {
-                exact_token(&mut input, "def")?;
-                let ident = token(&mut input).ok_or("unexpected EOF")?;
-                let ident = ident.strip_suffix(':').ok_or("no trailing colon")?;
-                let r#type = self.expr(&mut input)?;
-                exact_token(&mut input, ":=")?;
-
-                let value = self.expr(&mut input)?;
-                let mut checker = LEVEL_Z.lam(r#type.clone()).app([value]);
-                checker.visit_mut(0, |_, e| match e {
-                    &mut Expr::FVar(n) if transparent_start <= n => {
-                        e.clone_from(&transparent[(n - transparent_start) as usize]);
-                    }
-                    _ => {}
-                });
-                self.kernel.type_of(&checker)?;
-                transparent.push(take(checker.unwrap_app().1));
-
-                self.constant(ident, r#type)?;
-
-                if peek(input) != Some([","]) {
-                    break;
-                }
-                exact_token(&mut input, ",")?;
-            }
-            exact_token(&mut input, ";")?;
+            self.def(&mut input)?;
         }
+        Ok(())
+    }
+    fn def(&mut self, input: &mut &str) -> Result<(), String> {
+        exact_token(input, "def")?;
+        let ident = token(input).ok_or("unexpected EOF")?;
+        let ident = ident.strip_suffix(':').ok_or("no trailing colon")?;
+        let r#type = self.expr(input)?;
+        exact_token(input, ":=")?;
+
+        let value = self.expr(input)?;
+        let mut checker = LEVEL_Z.lam(r#type.clone()).app([value]);
+        checker.visit_mut(0, |_, e| match e {
+            &mut Expr::FVar(n) => e.clone_from(&self.vals[n as usize]),
+            _ => {}
+        });
+        self.kernel.type_of(&checker)?;
+        self.vals.push(take(checker.unwrap_app().1));
+        let n = self.constant(ident, r#type)?;
+
+        if peek(input) == Some([","]) {
+            exact_token(input, ",").unwrap();
+            exact_token(input, "with")?;
+            exact_token(input, "{")?;
+            while peek(input) != Some(["}"]) {
+                self.def(input)?;
+            }
+            exact_token(input, "}")?;
+        } else {
+            exact_token(input, ";")?;
+        }
+        self.vals[n as usize] = Expr::FVar(n as u32);
         Ok(())
     }
     pub fn axiom(&mut self, ident: &str, r#type: &str) -> Result<(), String> {
         let (e, _) = self.check_expr(r#type)?;
-        self.constant(ident, e)?;
+        let n = self.constant(ident, e)?;
+        self.vals.push(Expr::FVar(n));
         Ok(())
     }
     pub(crate) fn check_expr(&mut self, mut expr: &str) -> Result<(Expr, Expr), String> {
@@ -78,17 +82,14 @@ impl State {
         let r#type = self.kernel.type_of(&e)?;
         Ok((e, r#type))
     }
-    fn constant(&mut self, ident: &str, r#type: Expr) -> Result<(), String> {
-        let n = self.kernel.add(ident, r#type);
-        self.def(ident, n)
-    }
-    fn def(&mut self, ident: &str, fvar: u32) -> Result<(), String> {
+    fn constant(&mut self, ident: &str, r#type: Expr) -> Result<u32, String> {
         if self.defs.contains_key(ident) {
             return Err(format!("duplicate definition `{ident}`"));
         }
-        log::info!("added decl {ident} = {fvar}");
-        self.defs.insert(ident.to_owned(), fvar);
-        Ok(())
+        let (ident, n) = self.kernel.add(ident, r#type);
+        log::info!("added {ident} = {n}");
+        self.defs.insert(ident, n);
+        Ok(n)
     }
     fn expr(&self, input: &mut &str) -> Result<Expr, String> {
         let defs = &self.defs;
@@ -98,7 +99,7 @@ impl State {
 }
 
 struct Context<'s, 'i> {
-    defs: &'s HashMap<String, u32>,
+    defs: &'s HashMap<Rc<str>, u32>,
     locals: Vec<&'i str>,
 }
 
@@ -138,7 +139,7 @@ fn expr<'i>(cx: &mut Context<'_, 'i>, input: &mut &'i str) -> Result<Expr, Strin
     }
 }
 
-fn fvar(defs: &HashMap<String, u32>, v: &str) -> Result<u32, String> {
+fn fvar(defs: &HashMap<Rc<str>, u32>, v: &str) -> Result<u32, String> {
     let res = defs.get(v).copied();
     res.ok_or_else(|| format!("unknown variable `{v}`"))
 }
@@ -205,7 +206,7 @@ fn peek<const N: usize>(mut input: &str) -> Option<[&str; N]> {
 }
 
 fn token<'s>(input: &mut &'s str) -> Option<&'s str> {
-    let punct = ['(', ')', ',', ';', '\n', '\t', ' '];
+    let punct = ['(', ')', '{', '}', ',', ';', '\n', '\t', ' '];
     if input.is_empty() {
         return None;
     }
@@ -224,3 +225,4 @@ use crate::kernel;
 use crate::kernel::builtins::*;
 use std::collections::HashMap;
 use std::mem::take;
+use std::rc::Rc;

@@ -2,6 +2,7 @@
     clippy::short_circuit_statement,
     clippy::diverging_sub_expression,
     const_item_mutation,
+    clippy::single_match,
     clippy::new_without_default
 )]
 
@@ -24,14 +25,15 @@ impl Kernel {
 const PRELUDE: &str = "
     def HEq: ∀ u: Level, ∀ α: Sort u, ∀ a: α, ∀ β: Sort u, ∀ b: β, Sort Level:0 :=
         λ u: Level, λ α: Sort u, λ a: α, Ind(Self: ∀ β: Sort u, ∀ b: β, Sort Level:0, Self α a),
-    def HEq:def: ∀ u: Level,
-        Ind(Self: (∀ b: (∀ α: Sort u, ∀ a: α, ∀ β: Sort u, ∀ b: β, Sort Level:0), Sort Level:0),
-            Self (λ α: Sort u, λ a: α, Ind(Self: ∀ β: Sort u, ∀ b: β, Sort Level:0, Self α a)))
-        (HEq u) :=
-        λ u: Level, Ind:constr(
-            Self: (∀ b: (∀ α: Sort u, ∀ a: α, ∀ β: Sort u, ∀ b: β, Sort Level:0), Sort Level:0),
-            Self (HEq u));
-
+    with {
+        def HEq:def: ∀ u: Level,
+            Ind(Self: (∀ b: (∀ α: Sort u, ∀ a: α, ∀ β: Sort u, ∀ b: β, Sort Level:0), Sort Level:0),
+                Self (λ α: Sort u, λ a: α, Ind(Self: ∀ β: Sort u, ∀ b: β, Sort Level:0, Self α a)))
+            (HEq u) :=
+            λ u: Level, Ind:constr(
+                Self: (∀ b: (∀ α: Sort u, ∀ a: α, ∀ β: Sort u, ∀ b: β, Sort Level:0), Sort Level:0),
+                Self (HEq u));
+    }
     def HEq:refl: ∀ u: Level, ∀ α: Sort u, ∀ a: α, HEq u α a α a := λ u: Level, λ α: Sort u, λ a: α,
         Ind:elim(
             Self: (∀ b: (∀ α: Sort u, ∀ a: α, ∀ β: Sort u, ∀ b: β, Sort Level:0), Sort Level:0),
@@ -53,30 +55,37 @@ const PRELUDE: &str = "
             ∀ of_to: ∀ a: α, HEq u α (of (to a)) α a,
             ∀ to_of: ∀ b: β, HEq v β (to (of b)) β b,
             Self),
-    def Equiv:eq_ind: ∀ u: Level, ∀ v: Level, ∀ α: Sort u, ∀ β: Sort v,
-        HEq (Level:s (Level:max u v))
-            (Sort (Level:max u v)) (Equiv u v α β)
-            (Sort (Level:max u v)) Ind(Self: Sort (Level:max u v),
-                ∀ to: ∀ a: α, β, ∀ of: ∀ b: β, α,
-                ∀ of_to: ∀ a: α, HEq u α (of (to a)) α a,
-                ∀ to_of: ∀ b: β, HEq v β (to (of b)) β b,
-                Self)
-        := λ u: Level, λ v: Level, λ α: Sort u, λ β: Sort v,
-            HEq:refl (Level:s (Level:max u v)) (Sort (Level:max u v)) (Equiv u v α β);
+    with {
+        def Equiv:eq_ind: ∀ u: Level, ∀ v: Level, ∀ α: Sort u, ∀ β: Sort v,
+            HEq (Level:s (Level:max u v))
+                (Sort (Level:max u v)) (Equiv u v α β)
+                (Sort (Level:max u v)) Ind(Self: Sort (Level:max u v),
+                    ∀ to: ∀ a: α, β, ∀ of: ∀ b: β, α,
+                    ∀ of_to: ∀ a: α, HEq u α (of (to a)) α a,
+                    ∀ to_of: ∀ b: β, HEq v β (to (of b)) β b,
+                    Self)
+            := λ u: Level, λ v: Level, λ α: Sort u, λ β: Sort v,
+                HEq:refl (Level:s (Level:max u v)) (Sort (Level:max u v)) (Equiv u v α β);
+    }
 
     def Trunc: ∀ u: Level, ∀ α: Sort u, Sort u := λ u: Level, λ α: Sort u, α,
-    def Trunc:mk: ∀ u: Level, ∀ α: Sort u, ∀ a: α, Trunc u α := λ u: Level, λ α: Sort u, λ a: α, a,
-    def Trunc:lift: ∀ u: Level, ∀ v: Level, ∀ α: Sort u,
-        ∀ motive: (∀ t: Trunc u α, Sort v),
-        ∀ f: (∀ a: α, motive (Trunc:mk u α a)),
-        ∀ hf: (∀ a: α, ∀ b: α, HEq v (motive (Trunc:mk u α a)) (f a) (motive (Trunc:mk u α b)) (f b)),
-        ∀ t: Trunc u α,
-        motive t := λ u: Level, λ v: Level, λ α: Sort u,
-        λ motive: (∀ t: Trunc u α, Sort v),
-        λ f: (∀ a: α, motive (Trunc:mk u α a)),
-        λ hf: (∀ a: α, ∀ b: α, HEq v (motive (Trunc:mk u α a)) (f a) (motive (Trunc:mk u α b)) (f b)),
-        λ t: Trunc u α,
-        f t;
+    with {
+        def Trunc:mk: ∀ u: Level, ∀ α: Sort u, ∀ a: α, Trunc u α :=
+            λ u: Level, λ α: Sort u, λ a: α, a, with {
+        def Trunc:lift: ∀ u: Level, ∀ v: Level, ∀ α: Sort u,
+            ∀ motive: (∀ t: Trunc u α, Sort v),
+            ∀ f: (∀ a: α, motive (Trunc:mk u α a)),
+            ∀ hf: (∀ a: α, ∀ b: α,
+                HEq v (motive (Trunc:mk u α a)) (f a) (motive (Trunc:mk u α b)) (f b)),
+            ∀ t: Trunc u α,
+            motive t := λ u: Level, λ v: Level, λ α: Sort u,
+            λ motive: (∀ t: Trunc u α, Sort v),
+            λ f: (∀ a: α, motive (Trunc:mk u α a)),
+            λ hf: (∀ a: α, ∀ b: α,
+                HEq v (motive (Trunc:mk u α a)) (f a) (motive (Trunc:mk u α b)) (f b)),
+            λ t: Trunc u α,
+            f t;
+    }}
 ";
 
 const AXIOMS: [(&str, &str); 3] = [
