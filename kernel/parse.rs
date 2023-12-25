@@ -41,6 +41,10 @@ impl State {
         exact_token(input, "def")?;
         let ident = token(input).ok_or("unexpected EOF")?;
         let ident = ident.strip_suffix(':').ok_or("no trailing colon")?;
+        if self.defs.contains_key(ident) {
+            return Err(format!("duplicate definition `{ident}`"));
+        }
+
         let r#type = self.expr(input)?;
         exact_token(input, ":=")?;
 
@@ -52,7 +56,10 @@ impl State {
         });
         self.kernel.type_of(&checker)?;
         self.vals.push(take(checker.unwrap_app().1));
-        let n = self.constant(ident, r#type)?;
+
+        let (ident, n) = self.kernel.add(ident, r#type);
+        log::info!("added {ident} = {n}");
+        self.defs.insert(ident, n);
 
         if peek(input) == Some([","]) {
             exact_token(input, ",").unwrap();
@@ -65,31 +72,17 @@ impl State {
         } else {
             exact_token(input, ";")?;
         }
-        self.vals[n as usize] = Expr::FVar(n as u32);
+        self.vals[n as usize] = Expr::FVar(n);
         Ok(())
     }
-    pub fn axiom(&mut self, ident: &str, r#type: &str) -> Result<(), String> {
-        let (e, _) = self.check_expr(r#type)?;
-        let n = self.constant(ident, e)?;
-        self.vals.push(Expr::FVar(n));
-        Ok(())
-    }
+    #[cfg(test)]
     pub(crate) fn check_expr(&mut self, mut expr: &str) -> Result<(Expr, Expr), String> {
         let e = self.expr(&mut expr)?;
         if !expr.is_empty() {
-            return Err("trailing tokens in axiom".to_owned());
+            return Err("trailing tokens".to_owned());
         }
         let r#type = self.kernel.type_of(&e)?;
         Ok((e, r#type))
-    }
-    fn constant(&mut self, ident: &str, r#type: Expr) -> Result<u32, String> {
-        if self.defs.contains_key(ident) {
-            return Err(format!("duplicate definition `{ident}`"));
-        }
-        let (ident, n) = self.kernel.add(ident, r#type);
-        log::info!("added {ident} = {n}");
-        self.defs.insert(ident, n);
-        Ok(n)
     }
     fn expr(&self, input: &mut &str) -> Result<Expr, String> {
         let defs = &self.defs;

@@ -1,9 +1,4 @@
 #[test]
-fn kernel_new() {
-    crate::Kernel::new();
-}
-
-#[test]
 fn pass() {
     for s in CHECKS {
         log::info!("typechecking\n{s}");
