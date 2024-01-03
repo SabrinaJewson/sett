@@ -6,9 +6,6 @@ pub(crate) enum Expr {
     Lam(Box<Expr>, Box<Expr>),
     Pi(Box<Expr>, Box<Expr>),
     App(Box<Expr>, Box<Expr>),
-    Ind(Box<Ind>),
-    IndConstr(u16, Box<Ind>),
-    IndElim(Box<Ind>),
 }
 
 impl Default for Expr {
@@ -17,41 +14,21 @@ impl Default for Expr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Ind {
-    pub sm: bool,
-    pub arity: Expr,
-    pub constrs: Vec<Expr>,
-}
-
-macro_rules! visit {
-    ($($ident:ident $($mut:ident)?),*) => { $(
-        impl Expr {
-            pub fn $ident<E, F>(&$($mut)? self, depth: u16, f: &mut F) -> Result<(), E>
-            where
-                F: FnMut(u16, &$($mut)? Expr) -> Result<(), E>,
-            {
-                match self {
-                    Expr::Lam(l, r) | Expr::Pi(l, r) => (l.$ident(depth, f)?, r.$ident(depth + 1, f)?).1,
-                    Expr::App(l, r) => (l.$ident(depth, f)?, r.$ident(depth, f)?).1,
-                    Expr::Ind(i) | Expr::IndConstr(_, i) | Expr::IndElim(i) => i.$ident(depth, f)?,
-                    _ => {}
-                }
-                f(depth, self)
+impl Expr {
+    pub fn try_visit<E, F>(&mut self, depth: u16, f: &mut F) -> Result<(), E>
+    where
+        F: FnMut(u16, &mut Expr) -> Result<(), E>,
+    {
+        match self {
+            Self::Lam(l, r) | Self::Pi(l, r) => {
+                (l.try_visit(depth, f)?, r.try_visit(depth + 1, f)?).1
             }
+            Self::App(l, r) => (l.try_visit(depth, f)?, r.try_visit(depth, f)?).1,
+            _ => {}
         }
-        impl Ind {
-            pub fn $ident<E, F>(&$($mut)? self, depth: u16, f: &mut F) -> Result<(), E>
-            where
-                F: FnMut(u16, &$($mut)? Expr) -> Result<(), E>,
-            {
-                self.arity.$ident(depth, f)?;
-                (&$($mut)? self.constrs).into_iter().try_for_each(|c| c.$ident(depth + 1, f))
-            }
-        }
-    )* }
+        f(depth, self)
+    }
 }
-visit!(try_visit, try_visit_mut mut);
 
 impl Expr {
     pub fn lam(self, r#type: impl Into<Box<Expr>>) -> Self {
@@ -73,8 +50,8 @@ impl Expr {
             _ => panic!(),
         }
     }
-    pub fn visit_mut(&mut self, depth: u16, mut f: impl FnMut(u16, &mut Expr)) {
-        let _ = self.try_visit_mut(depth, &mut |depth, e| {
+    pub fn visit(&mut self, depth: u16, mut f: impl FnMut(u16, &mut Expr)) {
+        let _ = self.try_visit(depth, &mut |depth, e| {
             f(depth, e);
             Ok::<_, Infallible>(())
         });

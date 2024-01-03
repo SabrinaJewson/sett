@@ -50,7 +50,7 @@ impl State {
 
         let value = self.expr(input)?;
         let mut checker = LEVEL_Z.lam(r#type.clone()).app([value]);
-        checker.visit_mut(0, |_, e| match e {
+        checker.visit(0, |_, e| match e {
             &mut Expr::FVar(n) => e.clone_from(&self.vals[n as usize]),
             _ => {}
         });
@@ -75,7 +75,15 @@ impl State {
         self.vals[n as usize] = Expr::FVar(n);
         Ok(())
     }
-    #[cfg(test)]
+    pub fn axiom(&mut self, mut input: &str) -> Result<(), String> {
+        let ident = token(&mut input).ok_or("unexpected EOF")?;
+        let ident = ident.strip_suffix(':').ok_or("no trailing colon")?;
+        let (r#type, _) = self.check_expr(input)?;
+        let (ident, n) = self.kernel.add(ident, r#type);
+        self.defs.insert(ident, n);
+        self.vals.push(Expr::FVar(n));
+        Ok(())
+    }
     pub(crate) fn check_expr(&mut self, mut expr: &str) -> Result<(Expr, Expr), String> {
         let e = self.expr(&mut expr)?;
         if !expr.is_empty() {
@@ -109,11 +117,6 @@ fn expr<'i>(cx: &mut Context<'_, 'i>, input: &mut &'i str) -> Result<Expr, Strin
                 exact_token(input, ",")?;
                 Ok(expr(cx, input)?.lam(l))
             })?,
-            "Ind" => Expr::Ind(ind(cx, input)?),
-            i if i.starts_with("Ind:constr") => {
-                Expr::IndConstr(number("Ind:constr", i)?, ind(cx, input)?)
-            }
-            "Ind:elim" => Expr::IndElim(ind(cx, input)?),
             "(" => (expr(cx, input)?, exact_token(input, ")")?).0,
             ")" => return Err("unexpected `)`; expected expression".to_owned()),
             v => match cx.locals.iter().rev().position(|&x| x == v) {
@@ -135,24 +138,6 @@ fn expr<'i>(cx: &mut Context<'_, 'i>, input: &mut &'i str) -> Result<Expr, Strin
 fn fvar(defs: &HashMap<Rc<str>, u32>, v: &str) -> Result<u32, String> {
     let res = defs.get(v).copied();
     res.ok_or_else(|| format!("unknown variable `{v}`"))
-}
-
-fn ind<'i>(cx: &mut Context<'_, 'i>, input: &mut &'i str) -> Result<Box<Ind>, String> {
-    exact_token(input, "(")?;
-    let sm = peek(input) == Some(["small", ","]);
-    if sm {
-        exact_token(input, "small").unwrap();
-        exact_token(input, ",").unwrap();
-    }
-    bind(cx, input, |cx, input, arity| {
-        let mut constrs = Vec::new();
-        while input.starts_with(',') {
-            exact_token(input, ",").unwrap();
-            constrs.push(expr(cx, input)?);
-        }
-        exact_token(input, ")")?;
-        Ok(Box::new(Ind { sm, arity, constrs }))
-    })
 }
 
 fn bind<'s, 'i, F, R>(cx: &mut Context<'s, 'i>, input: &mut &'i str, f: F) -> Result<R, String>
@@ -213,7 +198,6 @@ fn token<'s>(input: &mut &'s str) -> Option<&'s str> {
 }
 
 use crate::expr::Expr;
-use crate::expr::Ind;
 use crate::kernel;
 use crate::kernel::builtins::*;
 use std::collections::HashMap;
