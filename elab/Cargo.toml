@@ -7,5 +7,10 @@ publish = false
 [lib]
 path = "lib.rs"
 
+[dependencies]
+qp-trie = "0.8.2"
+rustc-hash = "1.1.0"
+salsa = { git = "https://github.com/salsa-rs/salsa", package = "salsa-2022", rev = "f1d318a" }
+
 [dev-dependencies]
 kernel = { path = "../kernel" }

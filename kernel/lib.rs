@@ -24,6 +24,11 @@ impl Kernel {
 const AXIOMS: &str = "\
 Eq: ∀ u: Level, ∀ α: Sort u, ∀ a: α, ∀ b: α, Sort Level:0
 Eq:refl: ∀ u: Level, ∀ α: Sort u, ∀ a: α, Eq u α a a
+funext: ∀ u: Level, ∀ v: Level, ∀ α: Sort u, ∀ β: (∀ a: α, Sort v),\
+    ∀ f: (∀ a: α, β a), ∀ g: (∀ a: α, β a), ∀ h: (∀ a: α, Eq v (β a) (f a) (g a)),\
+    Eq (Level:imax u v) (∀ a: α, β a) f g
+propext: ∀ A: Sort Level:0, ∀ B: Sort Level:0, ∀ h₁: (∀ h: A, B), ∀ h₂: (∀ h: B, A),\
+    Eq (Level:s Level:0) (Sort Level:0) A B
 Eq:elim: ∀ u: Level, ∀ v: Level, ∀ α: Sort u, ∀ motive: (∀ a: α, Sort v), ∀ a: α, ∀ h: motive a,\
     ∀ b: α, ∀ t: Eq u α a b, motive b
 Eq:refl_elim: ∀ u: Level, ∀ v: Level, ∀ α: Sort u, ∀ motive: (∀ a: α, Sort v), ∀ a: α,\
@@ -69,37 +74,9 @@ W:mk_elim: ∀ u: Level, ∀ v: Level, ∀ α: Sort u, ∀ β: (∀ a: α, Sort 
         (f a b (λ i: β a, W:elim u v α β motive f (b i)))
 Inhabited: ∀ u: Level, ∀ α: Sort u, Sort Level:0
 Inhabited:mk: ∀ u: Level, ∀ α: Sort u, ∀ a: α, Inhabited u α
-Inhabited:elim: ∀ u: Level, ∀ α: Sort u, ∀ motive: Sort Level:0, ∀ f: (∀ a: α, motive),\
+Inhabited:elim_subsingleton: ∀ u: Level, ∀ v: Level, ∀ α: Sort u, ∀ motive: Sort v,\
+    ∀ h: (∀ a b: motive, Eq v motive a b), ∀ f: (∀ a: α, motive),\
     ∀ t: Inhabited u α, motive
-Trunc: ∀ u: Level, ∀ α: Sort u, Sort u
-Trunc:mk: ∀ u: Level, ∀ α: Sort u, ∀ a: α, Trunc u α
-Trunc:eq: ∀ u: Level, ∀ α: Sort u, ∀ a: Trunc u α, ∀ b: Trunc u α, Eq u (Trunc u α) a b
-Trunc:elim: ∀ u: Level, ∀ v: Level, ∀ α: Sort u, ∀ motive: Sort v, ∀ f: (∀ a: α, motive),\
-    ∀ hf: (∀ a: α, ∀ b: α, Eq v motive (f a) (f b)), ∀ t: Trunc u α, motive
-Acc: ∀ u: Level, ∀ α: Sort u, ∀ r: (∀ a: α, ∀ b: α, Sort Level:0), ∀ x: α, Sort Level:0
-Acc:mk: ∀ u: Level, ∀ α: Sort u, ∀ r: (∀ a: α, ∀ b: α, Sort Level:0), ∀ x: α,\
-    ∀ h: (∀ y: α, ∀ h: r y x, Acc u α r y), Acc u α r x
-Acc:elim: ∀ u: Level, ∀ v: Level, ∀ α: Sort u, ∀ r: (∀ a: α, ∀ b: α, Sort Level:0),\
-  ∀ motive: (∀ a: α, Sort v),\
-  ∀ e: (∀ x: α,\
-    ∀ h₁: (∀ y: α, ∀ h: r y x, Acc u α r y), ∀ h₂: (∀ y: α, ∀ h: r y x, motive y), motive x),\
-  ∀ x: α,\
-  ∀ t: Acc u α r x,\
-  motive x
-Acc:mk_elim: ∀ u: Level, ∀ v: Level, ∀ α: Sort u, ∀ r: (∀ a: α, ∀ b: α, Sort Level:0),\
-  ∀ motive: (∀ a: α, Sort v),\
-  ∀ e: (∀ x: α,\
-    ∀ h₁: (∀ y: α, ∀ h: r y x, Acc u α r y), ∀ h₂: (∀ y: α, ∀ h: r y x, motive y), motive x),\
-  ∀ x: α,\
-  ∀ f: (∀ y: α, ∀ h: r y x, Acc u α r y),\
-  Eq v (motive x)\
-    (Acc:elim u v α r motive e x (Acc:mk u α r x f))\
-    (e x f (λ y: α, λ h: r y x, Acc:elim u v α r motive e y (f y h)))
-funext: ∀ u: Level, ∀ v: Level, ∀ α: Sort u, ∀ β: (∀ a: α, Sort v),\
-    ∀ f: (∀ a: α, β a), ∀ g: (∀ a: α, β a), ∀ h: (∀ a: α, Eq v (β a) (f a) (g a)),\
-    Eq (Level:imax u v) (∀ a: α, β a) f g
-propext: ∀ A: Sort Level:0, ∀ B: Sort Level:0, ∀ h₁: (∀ h: A, B), ∀ h₂: (∀ h: B, A),\
-    Eq (Level:s Level:0) (Sort Level:0) A B
 ";
 
 mod stack;
